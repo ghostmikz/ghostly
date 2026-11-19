@@ -121,6 +121,10 @@ fun NowPlayingScreen(
     var playerCoords by remember { mutableStateOf<androidx.compose.ui.layout.LayoutCoordinates?>(null) }
     val density = LocalDensity.current
     val favs by History.favorites.collectAsState()
+    // BitChord's landscapePlayerAvailable: a window wider than tall, and wide enough
+    // for two columns, gets the two-column player (a phone on its side, a tablet).
+    val config = androidx.compose.ui.platform.LocalConfiguration.current
+    val sideways = config.screenWidthDp > config.screenHeightDp && config.screenWidthDp >= 560
     var showQueue by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
     var showSleep by remember { mutableStateOf(false) }
@@ -146,20 +150,7 @@ fun NowPlayingScreen(
         // "Disable blend effects" leaves the plain dark player.
         if (!noBlend) Box(fadeRest) { ArtworkMeshBackdrop(mesh, seam = { with(density) { seamPx.toDp() } }) }
 
-        Column(Modifier.fillMaxSize().systemBarsPadding()) {
-            // handle + where it is playing from
-            Column(fadeRest.fillMaxWidth().padding(horizontal = 28.dp).clickable(remember { MutableInteractionSource() }, null, onClick = onClose),
-                horizontalAlignment = Alignment.CenterHorizontally) {
-                Spacer(Modifier.height(10.dp))
-                Box(Modifier.width(38.dp).height(5.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.35f)))
-                Spacer(Modifier.height(10.dp))
-                if (!hideSongStatus) {
-                    Text(if (state.from.isNotEmpty()) "Playing from ${state.from}" else "Now Playing",
-                        color = Color.White.copy(alpha = 0.85f), fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1)
-                }
-            }
-
-            Spacer(Modifier.weight(0.5f))
+        // ---- the pieces, shared by the portrait and landscape players ----
             // "Full-screen cover art" runs the cover edge to edge with square corners.
             val restCorner = if (fullCover) 0.dp else 10.dp
             val coverShape = remember(restCorner) {
@@ -169,16 +160,9 @@ fun NowPlayingScreen(
                             .createOutline(size, layoutDirection, density)
                 }
             }
-            // Everything under the cover (title, seek bar, transport, volume, bottom
-            // row) needs about 480dp, more with large text. On a short screen the
-            // cover gives way instead of pushing the bottom row off the screen.
-            val config = androidx.compose.ui.platform.LocalConfiguration.current
-            val coverMax = (config.screenHeightDp - 300 - 180 * config.fontScale).coerceAtLeast(140f).dp
+        val cover: @Composable (Modifier) -> Unit = { sizing ->
             Box(
-                Modifier.align(Alignment.CenterHorizontally)
-                    .then(if (fullCover) Modifier else Modifier.padding(horizontal = 28.dp))
-                    .widthIn(max = coverMax)
-                    .fillMaxWidth().aspectRatio(1f)
+                sizing
                     .onGloballyPositioned { coverCoords = it }
                     // BitChord's dock: the cover is *laid out* (not scaled) between the mini player's
                     // cover and this spot, so its corners morph cleanly. It rides only part of the
@@ -212,9 +196,8 @@ fun NowPlayingScreen(
                 if (art != null) Image(art.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                 else Icon(BitChordIcons.MusicNote, null, tint = Color(0xFF5A5A5E), modifier = Modifier.size(72.dp))
             }
-            Spacer(Modifier.weight(0.5f))
-
-            Column(fadeRest.padding(horizontal = 28.dp)) {
+        }
+        val credits: @Composable () -> Unit = {
             // title, artist, star, more
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
@@ -257,21 +240,20 @@ fun NowPlayingScreen(
                 }
             }
 
-            Spacer(Modifier.height(18.dp))
-            SeekBar(state, vm, if (nerdStats) song else null)
-
+        }
+        val transportRow: @Composable (Boolean) -> Unit = { compact ->
             // transport
             Row(
-                Modifier.fillMaxWidth().padding(vertical = 22.dp),
+                Modifier.fillMaxWidth().padding(vertical = if (compact) 6.dp else 22.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically,
             ) {
-                Transport(R.drawable.ic_player_previous, "Previous", 54.dp) { vm.previous() }
-                Transport(if (state.isPlaying) R.drawable.ic_player_pause else R.drawable.ic_player_play, "Play or pause", 72.dp) { vm.togglePlay() }
-                Transport(R.drawable.ic_player_next, "Next", 54.dp) { vm.next() }
+                Transport(R.drawable.ic_player_previous, "Previous", if (compact) 44.dp else 54.dp) { vm.previous() }
+                Transport(if (state.isPlaying) R.drawable.ic_player_pause else R.drawable.ic_player_play, "Play or pause", if (compact) 58.dp else 72.dp) { vm.togglePlay() }
+                Transport(R.drawable.ic_player_next, "Next", if (compact) 44.dp else 54.dp) { vm.next() }
             }
 
-            if (!hideVolume) VolumeBar()
-
+        }
+        val bottomRow: @Composable () -> Unit = {
             // bottom row: shuffle, repeat, queue
             Row(
                 Modifier.fillMaxWidth().padding(top = 22.dp, bottom = 12.dp),
@@ -286,13 +268,77 @@ fun NowPlayingScreen(
                                 .clip(CircleShape).background(Color.White).padding(horizontal = 4.dp))
                     }
                 }
-                BottomIcon(BitChordIcons.Queue, "Queue", false) { showQueue = true }
+                BottomIcon(BitChordIcons.Queue, "Queue", sideways && showQueue) { showQueue = !showQueue }
             }
+        }
+
+        if (sideways) {
+            LandscapePlayerLayout(
+                showQueue = showQueue,
+                onClose = onClose,
+                fadeRest = fadeRest,
+                cover = cover,
+                actions = bottomRow,
+                mainPane = { compact ->
+                    Column(Modifier.fillMaxWidth()) {
+                        if (!hideSongStatus) {
+                            Text(if (state.from.isNotEmpty()) "Playing from ${state.from}" else "Now Playing",
+                                color = Color.White.copy(alpha = 0.85f), fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+                            Spacer(Modifier.height(if (compact) 4.dp else 8.dp))
+                        }
+                        credits()
+                        Spacer(Modifier.height(if (compact) 6.dp else 14.dp))
+                        SeekBar(state, vm, if (nerdStats) song else null)
+                        transportRow(compact)
+                        if (!hideVolume) VolumeBar()
+                    }
+                },
+                queuePane = {
+                    Column(Modifier.fillMaxSize()) {
+                        Text("Playing Next", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(vertical = 8.dp))
+                        QueueList(state, vm, Modifier.fillMaxSize())
+                    }
+                },
+            )
+        } else Column(Modifier.fillMaxSize().systemBarsPadding()) {
+            // handle + where it is playing from
+            Column(fadeRest.fillMaxWidth().padding(horizontal = 28.dp).clickable(remember { MutableInteractionSource() }, null, onClick = onClose),
+                horizontalAlignment = Alignment.CenterHorizontally) {
+                Spacer(Modifier.height(10.dp))
+                Box(Modifier.width(38.dp).height(5.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.35f)))
+                Spacer(Modifier.height(10.dp))
+                if (!hideSongStatus) {
+                    Text(if (state.from.isNotEmpty()) "Playing from ${state.from}" else "Now Playing",
+                        color = Color.White.copy(alpha = 0.85f), fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+                }
+            }
+
+            Spacer(Modifier.weight(0.5f))
+            // Everything under the cover (title, seek bar, transport, volume, bottom
+            // row) needs about 480dp, more with large text. On a short screen the
+            // cover gives way instead of pushing the bottom row off the screen.
+            val coverMax = (config.screenHeightDp - 300 - 180 * config.fontScale).coerceAtLeast(140f).dp
+            cover(
+                Modifier.align(Alignment.CenterHorizontally)
+                    .then(if (fullCover) Modifier else Modifier.padding(horizontal = 28.dp))
+                    .widthIn(max = coverMax)
+                    .fillMaxWidth().aspectRatio(1f),
+            )
+            Spacer(Modifier.weight(0.5f))
+
+            Column(fadeRest.padding(horizontal = 28.dp)) {
+                credits()
+                Spacer(Modifier.height(18.dp))
+                SeekBar(state, vm, if (nerdStats) song else null)
+                transportRow(false)
+                if (!hideVolume) VolumeBar()
+                bottomRow()
             }
         }
     }
 
-    if (showQueue) QueueSheet(state, vm) { showQueue = false }
+    if (showQueue && !sideways) QueueSheet(state, vm) { showQueue = false }
     if (showSleep) SleepTimerSheet { showSleep = false }
 }
 
@@ -425,12 +471,20 @@ private fun QueueSheet(state: PlayerState, vm: PlayerViewModel, onDismiss: () ->
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = GhostlyColors.Card, contentColor = Color.White) {
         Text("Playing Next", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
+        QueueList(state, vm, Modifier.fillMaxHeight(0.75f))
+    }
+}
+
+/** The queue's rows: shared by the portrait sheet and the landscape player's right column. */
+@Composable
+private fun QueueList(state: PlayerState, vm: PlayerViewModel, modifier: Modifier) {
+    run {
         val list = rememberLazyListState(
             initialFirstVisibleItemIndex = if (Prefs.queueHistory.value) state.queueIndex.coerceAtLeast(0) else 0,
         )
         val showHistory by Prefs.queueHistory.state.collectAsState()
         val first = if (showHistory) 0 else state.queueIndex.coerceAtLeast(0)
-        LazyColumn(state = list, modifier = Modifier.fillMaxHeight(0.75f)) {
+        LazyColumn(state = list, modifier = modifier) {
             itemsIndexed(state.queue.drop(first), key = { j, s -> "${s.id}-${j + first}" }) { j, s ->
                 val i = j + first
                 val now = i == state.queueIndex

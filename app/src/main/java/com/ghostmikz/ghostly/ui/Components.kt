@@ -112,7 +112,17 @@ fun SegmentedTabs(
             Box(
                 Modifier.weight(1f).fillMaxHeight().clip(CircleShape).background(bg).plainClick { onSelect(i) },
                 contentAlignment = Alignment.Center,
-            ) { Text(label, color = GhostlyColors.Text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1) }
+            ) {
+                // Shrinks to fit rather than being cut off: five labels share a
+                // narrow phone's width, more so with large text.
+                androidx.compose.foundation.text.BasicText(
+                    label,
+                    style = androidx.compose.ui.text.TextStyle(color = GhostlyColors.Text, fontWeight = FontWeight.SemiBold),
+                    maxLines = 1,
+                    autoSize = androidx.compose.foundation.text.TextAutoSize.StepBased(minFontSize = 10.sp, maxFontSize = 14.sp),
+                    modifier = Modifier.padding(horizontal = 2.dp),
+                )
+            }
         }
     }
 }

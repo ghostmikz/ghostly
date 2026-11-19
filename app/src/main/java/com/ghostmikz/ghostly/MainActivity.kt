@@ -60,6 +60,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -85,6 +86,40 @@ import com.ghostmikz.ghostly.ui.replay.ReplayStoryPage
 import com.ghostmikz.ghostly.ui.replay.cards
 import com.ghostmikz.ghostly.ui.replay.rememberReplayState
 import com.ghostmikz.ghostly.ui.replay.replayHolder
+
+/**
+ * The page stack as plain strings, so it survives rotation, a theme or font
+ * change, and the system recreating the activity: "album:12", "artist:Name"...
+ */
+private val StackSaver = listSaver<androidx.compose.runtime.snapshots.SnapshotStateList<Screen>, String>(
+    save = { stack -> stack.map { it.encode() } },
+    restore = { saved -> mutableStateListOf<Screen>().apply { addAll(saved.mapNotNull(::decodeScreen)) } },
+)
+
+private fun Screen.encode(): String = when (this) {
+    Screen.Settings -> "settings"
+    Screen.Recent -> "recent"
+    is Screen.AlbumScreen -> "album:$id"
+    is Screen.ArtistScreen -> "artist:$name"
+    is Screen.FolderScreen -> "folder:$path"
+    is Screen.PlaylistScreen -> "playlist:$id"
+    is Screen.Replay -> "replay:${landing.name}"
+}
+
+private fun decodeScreen(s: String): Screen? {
+    val kind = s.substringBefore(':')
+    val arg = s.substringAfter(':', "")
+    return when (kind) {
+        "settings" -> Screen.Settings
+        "recent" -> Screen.Recent
+        "album" -> arg.toLongOrNull()?.let { Screen.AlbumScreen(it) }
+        "artist" -> Screen.ArtistScreen(arg)
+        "folder" -> Screen.FolderScreen(arg)
+        "playlist" -> Screen.PlaylistScreen(arg)
+        "replay" -> runCatching { Screen.Replay(ReplayStoryPage.valueOf(arg)) }.getOrNull()
+        else -> null
+    }
+}
 
 private sealed interface Screen {
     data object Settings : Screen
@@ -221,15 +256,16 @@ private fun Main(vm: PlayerViewModel) {
     val state by vm.state.collectAsStateWithLifecycle()
     val stats by History.stats.collectAsStateWithLifecycle()
     var tab by rememberSaveable { mutableIntStateOf(0) }
-    val stack = remember { mutableStateListOf<Screen>() }
+    val stack = rememberSaveable(saver = StackSaver) { mutableStateListOf<Screen>() }
     val pageStates = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
     val motion = motionOn()
     val scope = rememberCoroutineScope()
 
     val back: () -> Unit = { if (stack.isNotEmpty()) stack.removeAt(stack.lastIndex) }
     // BitChord's "Add to playlist" sheet, for a song or (NEW_PLAYLIST) to make a playlist.
-    var pickerFor by remember { mutableStateOf<Song?>(null) }
-    var pickerOpen by remember { mutableStateOf(false) }
+    // The picker's song is kept by id across recreation, and found again in the library.
+    var pickerForId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var pickerOpen by rememberSaveable { mutableStateOf(false) }
     val actions = remember(vm) {
         LibraryActions(
             play = { songs, i, shuffle, from -> vm.play(songs, i, shuffle, from) },
@@ -242,7 +278,7 @@ private fun Main(vm: PlayerViewModel) {
             openSettings = { stack += Screen.Settings },
             back = back,
             openPlaylist = { stack += Screen.PlaylistScreen(it) },
-            addToPlaylist = { pickerFor = it ?: NEW_PLAYLIST; pickerOpen = true },
+            addToPlaylist = { pickerForId = (it ?: NEW_PLAYLIST).id; pickerOpen = true },
         )
     }
 
@@ -257,9 +293,9 @@ private fun Main(vm: PlayerViewModel) {
     }
 
     // ---- Replay (BitChord): one set of numbers for the Library cards, the page and the stories ----
-    var replayStory by remember { mutableStateOf<ReplayStoryPage?>(null) }
-    var replayShare by remember { mutableStateOf<ReplayStoryPage?>(null) }
-    var showReplayShare by remember { mutableStateOf(false) }
+    var replayStory by rememberSaveable { mutableStateOf<ReplayStoryPage?>(null) }
+    var replayShare by rememberSaveable { mutableStateOf<ReplayStoryPage?>(null) }
+    var showReplayShare by rememberSaveable { mutableStateOf(false) }
     val replayOpen = stack.lastOrNull() is Screen.Replay || replayStory != null || showReplayShare ||
         (tab == 1 && stack.isEmpty())
     val (replay, setReplayPeriod) = rememberReplayState(replayOpen)
@@ -393,7 +429,7 @@ private fun Main(vm: PlayerViewModel) {
                     else -> SearchScreen(library, currentId, actions, bottomPad)
                 }
                 Screen.Settings -> SettingsScreen(library.songs.size, vm::loadLibrary, bottomPad, back,
-                    covered = playerOpen || replayStory != null)
+                    covered = playerOpen || replayStory != null, scanning = libraryLoading)
                 Screen.Recent -> {
                     val songs = remember(stats, library) {
                         val byId = library.songs.associateBy { it.id }
@@ -504,7 +540,8 @@ private fun Main(vm: PlayerViewModel) {
         }
 
         if (pickerOpen) {
-            PlaylistPickerSheet(song = pickerFor.takeUnless { it === NEW_PLAYLIST }, library = library) { pickerOpen = false }
+            val pickerSong = pickerForId?.takeIf { it != NEW_PLAYLIST.id }?.let { id -> library.songs.firstOrNull { it.id == id } }
+            PlaylistPickerSheet(song = pickerSong, library = library) { pickerOpen = false }
         }
 
         // ---- the player, sliding up from the bottom and following the finger ----

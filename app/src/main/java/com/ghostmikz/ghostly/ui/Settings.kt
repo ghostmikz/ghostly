@@ -103,6 +103,8 @@ fun SettingsScreen(
     songCount: Int, onRescan: () -> Unit, bottomPad: Dp, onBack: () -> Unit,
     /** The player or a story is over Settings: back belongs to that, not to a sub-page. */
     covered: Boolean = false,
+    /** True while the library is being read, so "Rescan music" can say so. */
+    scanning: Boolean = false,
 ) {
     var page by rememberSaveable { mutableStateOf(Page.Main) }
     BackHandler(enabled = page != Page.Main && !covered) { page = Page.Main }
@@ -116,7 +118,7 @@ fun SettingsScreen(
             Page.Account -> AccountPage()
             Page.Playback -> PlaybackPage()
             Page.Appearance -> AppearancePage()
-            Page.Local -> LocalPage(songCount, onRescan)
+            Page.Local -> LocalPage(songCount, onRescan, scanning)
             Page.Storage -> StoragePage()
             Page.Data -> DataPage()
             Page.Misc -> MiscPage()
@@ -336,7 +338,7 @@ private fun MiscPage() {
 }
 
 @Composable
-private fun LocalPage(songCount: Int, onRescan: () -> Unit) {
+private fun LocalPage(songCount: Int, onRescan: () -> Unit, scanning: Boolean) {
     var scanned by remember { mutableStateOf(false) }
     Spacer(Modifier.height(12.dp))
     Card {
@@ -346,7 +348,12 @@ private fun LocalPage(songCount: Int, onRescan: () -> Unit) {
     Spacer(Modifier.height(20.dp))
     Card {
         NavRow(Icons.Outlined.LibraryMusic, "Songs on this phone", null, value = "$songCount", chevron = false) {}
-        NavRow(Icons.Outlined.Refresh, "Rescan music", if (scanned) "Done" else "Look for new or removed files", last = true, chevron = false) {
+        NavRow(Icons.Outlined.Refresh, "Rescan music",
+            when {
+                scanned && scanning -> "Scanning…"
+                scanned -> "Done"
+                else -> "Look for new or removed files"
+            }, last = true, chevron = false) {
             onRescan(); scanned = true
         }
     }

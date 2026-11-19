@@ -22,10 +22,17 @@
         android:theme="@style/Theme.Ghostly"
         android:enableOnBackInvokedCallback="true">
 
+        <!--
+          As BitChord: no fixed orientation, and a rotation is a recomposition rather
+          than an activity restart, so the open player, queue and scroll positions
+          survive it. uiMode is left out on purpose: a light/dark change still
+          recreates the activity so the theme is rebuilt.
+        -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
