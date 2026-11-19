@@ -37,7 +37,10 @@ object Playlists {
         if (::file.isInitialized) return
         file = File(context.filesDir, "playlists.json")
         History.init(context)
-        val loaded = runCatching { parse(JSONObject(file.readText())) }.getOrNull()
+        val text = SafeFiles.read(file)
+        val loaded = text?.let { runCatching { parse(JSONObject(it)) }.getOrNull() }
+        // A file that exists but can't be read is set aside, never overwritten.
+        if (text != null && loaded == null) SafeFiles.setAside(file)
         // First run after playlists arrived: the old favourites become Liked.
         publish(loaded ?: listOf(Playlist(LIKED_ID, "Liked", History.favorites.value.toList())))
         if (loaded == null) save()
@@ -102,6 +105,10 @@ object Playlists {
         mutate { list -> list.filterNot { it.id == id } }
     }
 
+    /** Liked set to exactly [songIds] (an import of likes without playlists). */
+    fun replaceLiked(songIds: List<Long>) =
+        mutate { list -> list.map { if (it.isLiked) it.copy(songIds = songIds.distinct()) else it } }
+
     fun clearLiked() = mutate { list -> list.map { if (it.isLiked) it.copy(songIds = emptyList()) else it } }
 
     fun exportJson(): JSONObject = toJson(_playlists.value)
@@ -121,13 +128,7 @@ object Playlists {
         History.setFavorites(liked.songIds.toSet())
     }
 
-    private fun save() {
-        runCatching {
-            val tmp = File(file.parentFile, "playlists.json.tmp")
-            tmp.writeText(toJson(_playlists.value).toString())
-            tmp.renameTo(file)
-        }
-    }
+    private fun save() = SafeFiles.write(file, toJson(_playlists.value).toString())
 
     private fun toJson(list: List<Playlist>) = JSONObject().put("playlists", JSONArray().apply {
         list.forEach { p -> put(JSONObject().put("id", p.id).put("title", p.title).put("songs", JSONArray(p.songIds))) }
@@ -135,10 +136,15 @@ object Playlists {
 
     private fun parse(o: JSONObject): List<Playlist> {
         val arr = o.optJSONArray("playlists") ?: JSONArray()
-        return (0 until arr.length()).map { i ->
-            val p = arr.getJSONObject(i)
-            val songs = p.optJSONArray("songs") ?: JSONArray()
-            Playlist(p.getString("id"), p.optString("title", "Playlist"), (0 until songs.length()).map { songs.getLong(it) })
-        }
+        // One bad entry is skipped rather than losing every playlist with it, and a
+        // song listed twice is kept once (the pages key their rows by song id).
+        return (0 until arr.length()).mapNotNull { i ->
+            runCatching {
+                val p = arr.getJSONObject(i)
+                val songs = p.optJSONArray("songs") ?: JSONArray()
+                Playlist(p.getString("id"), p.optString("title", "Playlist"),
+                    (0 until songs.length()).mapNotNull { songs.optLong(it, -1).takeIf { id -> id >= 0 } }.distinct())
+            }.getOrNull()
+        }.distinctBy { it.id }
     }
 }

@@ -63,6 +63,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     fun loadLibrary() {
         viewModelScope.launch {
             _loading.value = true
+            ArtCache.forgetMissing()
             _library.value = runCatching { MusicRepository.load(getApplication(), com.ghostmikz.ghostly.data.Prefs.filterNonMusic.value) }.getOrDefault(Library())
             byId = _library.value.songs.associateBy { it.id.toString() }
             _loading.value = false
@@ -73,16 +74,22 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     private fun refresh() {
         val c = controller ?: return
         val ids = byId
-        val queue = (0 until c.mediaItemCount).mapNotNull { ids[c.getMediaItemAt(it).mediaId] }
+        // The queue in the order it will actually play (the shuffle order when
+        // shuffle is on), every item kept: one the library doesn't list (filtered
+        // out, or removed since) is drawn from the item's own tags, so a row's
+        // position always maps back to the right player index.
+        val order = playOrder(c)
+        queueOrder = order
+        val queue = order.map { i -> c.getMediaItemAt(i).let { item -> ids[item.mediaId] ?: item.asSong() } }
         _state.value = PlayerState(
-            current = c.currentMediaItem?.mediaId?.let { ids[it] },
+            current = c.currentMediaItem?.let { ids[it.mediaId] ?: it.asSong() },
             isPlaying = c.isPlaying,
             positionMs = c.currentPosition,
             durationMs = c.duration.takeIf { it > 0 } ?: 0,
             shuffle = c.shuffleModeEnabled,
             repeat = c.repeatMode,
             queue = queue,
-            queueIndex = c.currentMediaItemIndex,
+            queueIndex = order.indexOf(c.currentMediaItemIndex),
             from = from,
         )
     }
@@ -109,7 +116,25 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         controller?.seekTo(ms)
         _state.value = _state.value.copy(positionMs = ms)
     }
-    fun playQueueItem(index: Int) = controller?.seekTo(index, 0)
+    /** [index] is a row of [PlayerState.queue]; the player's own index comes from the play order. */
+    fun playQueueItem(index: Int) = controller?.let { c ->
+        queueOrder.getOrNull(index)?.takeIf { it < c.mediaItemCount }?.let { c.seekTo(it, 0) }
+    }
+
+    private var queueOrder: List<Int> = emptyList()
+
+    private fun playOrder(c: Player): List<Int> {
+        val timeline = c.currentTimeline
+        if (timeline.isEmpty) return emptyList()
+        if (!c.shuffleModeEnabled) return (0 until timeline.windowCount).toList()
+        val out = ArrayList<Int>(timeline.windowCount)
+        var i = timeline.getFirstWindowIndex(true)
+        while (i != androidx.media3.common.C.INDEX_UNSET && out.size < timeline.windowCount) {
+            out += i
+            i = timeline.getNextWindowIndex(i, Player.REPEAT_MODE_OFF, true)
+        }
+        return out
+    }
     fun toggleShuffle() = controller?.let { it.shuffleModeEnabled = !it.shuffleModeEnabled }
     fun cycleRepeat() = controller?.let {
         it.repeatMode = when (it.repeatMode) {
@@ -144,3 +169,17 @@ fun Song.toMediaItem(): MediaItem = MediaItem.Builder()
             .build(),
     )
     .build()
+
+/** A queue item the library doesn't list, drawn from its own tags. */
+private fun MediaItem.asSong(): Song {
+    val m = mediaMetadata
+    return Song(
+        id = mediaId.toLongOrNull() ?: -1L,
+        title = m.title?.toString().orEmpty(),
+        artist = m.artist?.toString() ?: "Unknown artist",
+        album = m.albumTitle?.toString() ?: "Unknown album",
+        albumId = m.artworkUri?.lastPathSegment?.toLongOrNull() ?: -1L,
+        durationMs = m.durationMs ?: 0L,
+        track = 0, year = 0, dateAdded = 0, folder = "",
+    )
+}

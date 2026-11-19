@@ -1,5 +1,6 @@
 package com.ghostmikz.ghostly
 
+import androidx.compose.ui.draw.drawBehind
 import android.Manifest
 import com.ghostmikz.ghostly.data.Song
 import androidx.compose.ui.layout.boundsInRoot
@@ -87,7 +88,6 @@ import com.ghostmikz.ghostly.ui.replay.replayHolder
 
 private sealed interface Screen {
     data object Settings : Screen
-    data object Favorites : Screen
     data object Recent : Screen
     data class AlbumScreen(val id: Long) : Screen
     data class ArtistScreen(val name: String) : Screen
@@ -112,6 +112,7 @@ class MainActivity : ComponentActivity() {
         History.init(this)
         com.ghostmikz.ghostly.data.Playlists.init(this)
         ListeningStats.init(this)
+        ArtCache.sizeFor(this)
         if (savedInstanceState == null) takeOpenPlayer(intent)
         setContent { GhostlyTheme { App(vm) } }
     }
@@ -124,6 +125,9 @@ class MainActivity : ComponentActivity() {
     /** A tap on a home-screen widget asks for the full player (BitChord's PlayerDeepLink). */
     private fun takeOpenPlayer(intent: Intent?) {
         if (intent?.getBooleanExtra(EXTRA_OPEN_PLAYER, false) != true) return
+        // Reopened from Recents, Android replays the original widget intent; that
+        // is not a new tap and shouldn't open the player again.
+        if (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return
         intent.removeExtra(EXTRA_OPEN_PLAYER)
         openPlayerPending.value = true
     }
@@ -139,8 +143,33 @@ private fun App(vm: PlayerViewModel) {
     val context = LocalContext.current
     fun granted() = ContextCompat.checkSelfPermission(context, audioPermission) == PackageManager.PERMISSION_GRANTED
     var hasPermission by remember { mutableStateOf(granted()) }
+    val activity = context as? android.app.Activity
+    var askedOnce by rememberSaveable { mutableStateOf(false) }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { hasPermission = granted() }
+    // Granted in system Settings while away: notice it on the way back.
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) hasPermission = granted()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     fun ask() {
+        // Denied for good ("Don't ask again", or twice on Android 11+): the dialog
+        // no longer appears, so the button opens Ghostly's page in system Settings.
+        val blocked = askedOnce && activity != null &&
+            !androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(activity, audioPermission)
+        askedOnce = true
+        if (blocked) {
+            runCatching {
+                context.startActivity(
+                    Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                        .setData(android.net.Uri.fromParts("package", context.packageName, null)),
+                )
+            }
+            return
+        }
         val perms = buildList {
             add(audioPermission)
             if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
@@ -188,11 +217,12 @@ private val TABS = listOf(
 @Composable
 private fun Main(vm: PlayerViewModel) {
     val library by vm.library.collectAsStateWithLifecycle()
+    val libraryLoading by vm.loading.collectAsStateWithLifecycle()
     val state by vm.state.collectAsStateWithLifecycle()
     val stats by History.stats.collectAsStateWithLifecycle()
-    val favIds by History.favorites.collectAsStateWithLifecycle()
     var tab by rememberSaveable { mutableIntStateOf(0) }
     val stack = remember { mutableStateListOf<Screen>() }
+    val pageStates = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
     val motion = motionOn()
     val scope = rememberCoroutineScope()
 
@@ -248,11 +278,17 @@ private fun Main(vm: PlayerViewModel) {
 
     BackHandler(enabled = replayStory != null && !showReplayShare) { replayStory = null }
     BackHandler(enabled = playerOpen) { settle(false) }
-    BackHandler(enabled = !playerOpen && stack.isNotEmpty()) { back() }
-    BackHandler(enabled = !playerOpen && stack.isEmpty() && tab != 0) { tab = 0 }
+    // The handler composed last wins, so these stand down while a story is up:
+    // back closes the story first, not the Replay page under it.
+    BackHandler(enabled = !playerOpen && replayStory == null && stack.isNotEmpty()) { back() }
+    BackHandler(enabled = !playerOpen && replayStory == null && stack.isEmpty() && tab != 0) { tab = 0 }
     LaunchedEffect(state.current == null) { if (state.current == null && playerOpen) settle(false) }
 
-    val lightBars = !LocalPalette.current.isDark && sheet.value > 0.5f
+    // Read through derivedStateOf: these only change at a threshold, so the screen
+    // recomposes then, not on every frame of the sheet's drag or spring.
+    val sheetMostlyClosed by remember { derivedStateOf { sheet.value > 0.5f } }
+    val sheetShowing by remember { derivedStateOf { sheet.value < 1f } }
+    val lightBars = !LocalPalette.current.isDark && sheetMostlyClosed
     val view = LocalView.current
     SideEffect {
         val window = (view.context as? Activity)?.window ?: return@SideEffect
@@ -339,9 +375,12 @@ private fun Main(vm: PlayerViewModel) {
             },
             label = "pages",
         ) { p ->
+            // Each page keeps its saved state (search text, list scroll) while it is
+            // off screen, so coming back from an album finds it as it was left.
+            pageStates.SaveableStateProvider("${p.tab}/${p.screen}") {
             when (val top = p.screen) {
                 null -> when (p.tab) {
-                    0 -> HomeScreen(library, actions, bottomPad)
+                    0 -> HomeScreen(library, actions, bottomPad, libraryLoading)
                     1 -> LibraryScreen(library, currentId, actions, bottomPad) {
                         LibraryReplayEntry(
                             cards = replayCards,
@@ -353,12 +392,8 @@ private fun Main(vm: PlayerViewModel) {
                     }
                     else -> SearchScreen(library, currentId, actions, bottomPad)
                 }
-                Screen.Settings -> SettingsScreen(library.songs.size, vm::loadLibrary, bottomPad, back)
-                Screen.Favorites -> {
-                    val songs = remember(favIds, library) { library.songs.filter { it.id in favIds } }
-                    CollectionScreen("Favorites", "Songs you starred", { m, c -> SymbolCover(BitChordIcons.StarFilled, m, c) },
-                        songs, currentId, actions, bottomPad, emptyText = "Tap the star on the player, or \"Add to favorites\" in a song's menu.")
-                }
+                Screen.Settings -> SettingsScreen(library.songs.size, vm::loadLibrary, bottomPad, back,
+                    covered = playerOpen || replayStory != null)
                 Screen.Recent -> {
                     val songs = remember(stats, library) {
                         val byId = library.songs.associateBy { it.id }
@@ -397,6 +432,7 @@ private fun Main(vm: PlayerViewModel) {
                     val songs = remember(library, top.path) { library.songs.filter { it.folder == top.path } }
                     FolderPage(top.path, songs, currentId, actions, bottomPad)
                 }
+            }
             }
         }
 
@@ -472,8 +508,9 @@ private fun Main(vm: PlayerViewModel) {
         }
 
         // ---- the player, sliding up from the bottom and following the finger ----
-        if (sheet.value < 1f) {
-            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = (1f - sheet.value) * 0.5f)))
+        if (sheetShowing) {
+            // The dim is drawn, not composed, from the sheet's position.
+            Box(Modifier.fillMaxSize().drawBehind { drawRect(Color.Black.copy(alpha = (1f - sheet.value) * 0.5f)) })
             Box(Modifier.fillMaxSize().offset { IntOffset(0, (sheet.value * screenH).roundToInt()) }) {
                 GhostlyTheme(dark = true) {
                     NowPlayingScreen(

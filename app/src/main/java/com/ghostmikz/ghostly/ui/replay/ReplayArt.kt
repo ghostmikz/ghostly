@@ -44,6 +44,9 @@ internal fun rememberCover(ref: String?, px: Int): Cover {
         Cover(cached, song == null || cached != null)
     }
     val cover by produceState(initial, ref, px) {
+        // produceState keeps its last value across key changes; start from this
+        // ref's own state so a row reused for another entry can't keep the old cover.
+        value = initial
         if (song == null || value.bitmap != null) return@produceState
         value = Cover(ArtCache.load(context, song, px), true)
     }
@@ -78,42 +81,6 @@ internal fun ReplayCover(
         else -> Box(modifier.size(size).clip(shape).background(Color.White.copy(alpha = 0.10f)))
     }
 }
-
-/**
- * The player's mesh, built from the cover behind [ref] with every colour turned
- * [hue] degrees around the wheel — see [storyHue].
- */
-@Composable
-internal fun rememberReplayMesh(ref: String?, hue: Float = 0f): ArtworkMesh? {
-    val cover = rememberCover(ref, MESH_ART_PX)
-    val albumId = remember(ref) { artSong(ref)?.albumId }
-    val source = remember(cover.bitmap, hue) {
-        cover.bitmap?.let { if (hue == 0f) it else it.hueRotated(hue) }
-    }
-    // A turned mesh is a different mesh from the player's, so it is cached
-    // under a key no real album id can have.
-    val key = albumId?.let { if (hue == 0f) it else Long.MIN_VALUE / 2 + it * 400 + hue.toLong() }
-    return rememberArtworkMesh(key, source)
-}
-
-/** [this] with every colour turned [degrees] around the wheel, tone untouched. */
-internal fun Bitmap.hueRotated(degrees: Float): Bitmap {
-    val soft = if (config == Bitmap.Config.HARDWARE) copy(Bitmap.Config.ARGB_8888, false) else this
-    val small = Bitmap.createScaledBitmap(soft, HUE_PX, HUE_PX, true)
-    val pixels = IntArray(HUE_PX * HUE_PX)
-    small.getPixels(pixels, 0, HUE_PX, 0, 0, HUE_PX, HUE_PX)
-    val hsl = FloatArray(3)
-    for (i in pixels.indices) {
-        ColorUtils.colorToHSL(pixels[i], hsl)
-        hsl[0] = (hsl[0] + degrees) % 360f
-        pixels[i] = ColorUtils.HSLToColor(hsl)
-    }
-    return Bitmap.createBitmap(pixels, HUE_PX, HUE_PX, Bitmap.Config.ARGB_8888)
-}
-
-/** The covers a mesh is read from; the mesh only ever averages them down. */
-private const val MESH_ART_PX = 192
-private const val HUE_PX = 48
 
 /** Rows, story cards and the poster, as BitChord sizes them. */
 internal const val ROW_ART_PX = 192

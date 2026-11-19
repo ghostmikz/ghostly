@@ -1,5 +1,9 @@
 package com.ghostmikz.ghostly.ui
 
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import android.view.HapticFeedbackConstants
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
@@ -48,6 +52,11 @@ fun Modifier.bounceClick(scaleDown: Float = 0.94f, haptic: Boolean = true, onCli
     )
     this
         .graphicsLayer { scaleX = scale; scaleY = scale }
+        // A button to TalkBack and switch access too: its double-tap reaches onClick.
+        .semantics {
+            role = Role.Button
+            onClick { click(); true }
+        }
         .pointerInput(Unit) {
             detectTapGestures(
                 onPress = { pressed = true; tryAwaitRelease(); pressed = false },

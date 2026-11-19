@@ -113,7 +113,8 @@ internal object MediaWidgetArt {
         canvas.scrimBottom(bandPx)
 
         val rounded = composed.withRoundedCorners(cornerRadiusPx)
-        composed.recycle()
+        // A zero radius hands back the same bitmap; recycling it would push a dead one.
+        if (rounded !== composed) composed.recycle()
         if (!failed) cacheKey?.let { composites.put(it, rounded) }
         return rounded
     }
@@ -150,7 +151,7 @@ internal object MediaWidgetArt {
         val square = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
         Canvas(square).fillCentreCropped(cover)
         val round = square.withRoundedCorners(sizePx / 2f)
-        square.recycle()
+        if (round !== square) square.recycle()
         composites.put(circleKey(key, sizePx), round)
         return round
     }
@@ -225,7 +226,7 @@ internal object MediaWidgetArt {
         // A little of the wallpaper through it too, so the capsule sits on
         // the home screen rather than being pasted over it.
         val rounded = composed.withRoundedCorners(heightPx / 2f, PILL_ALPHA)
-        composed.recycle()
+        if (rounded !== composed) composed.recycle()
         if (!failed && key != null) composites.put(pillKey(key, widthPx, heightPx), rounded)
         return rounded
     }

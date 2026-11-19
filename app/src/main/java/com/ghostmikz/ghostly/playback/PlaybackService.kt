@@ -56,6 +56,7 @@ class PlaybackService : MediaSessionService() {
         History.init(this)
         com.ghostmikz.ghostly.data.Playlists.init(this)
         ListeningStats.init(this)
+        com.ghostmikz.ghostly.ui.ArtCache.sizeFor(this)
 
         val player = ExoPlayer.Builder(this)
             .setAudioAttributes(
@@ -92,6 +93,13 @@ class PlaybackService : MediaSessionService() {
                 QueueStore.save(this@PlaybackService, player)
             }
 
+            override fun onPlaybackStateChanged(state: Int) {
+                // "After this song" on the last song: the queue just ends, with no
+                // transition to catch, so the timer is done here instead of lingering
+                // to pause some later song.
+                if (state == Player.STATE_ENDED && SleepTimer.afterTrack.value) SleepTimer.cancel()
+            }
+
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
                 publishWidgetState(playing = playWhenReady)
                 if (!playWhenReady) QueueStore.save(this@PlaybackService, player)
@@ -107,7 +115,7 @@ class PlaybackService : MediaSessionService() {
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
-                if (!isPlaying) ListeningRecorder.onStopped()
+                if (!isPlaying) ListeningRecorder.onPaused()
                 scrobbler?.onPlayerStateChanged(isPlaying, player.currentMediaItem?.toScrobbleTrack(), player.duration.takeIf { it > 0 })
                 if (isPlaying) record(player.currentMediaItem)
             }
@@ -164,13 +172,17 @@ class PlaybackService : MediaSessionService() {
                     secret = BuildConfig.LASTFM_SECRET,
                     sessionKey = sessionKey,
                 )
+                val fresh = scrobbler == null
                 val manager = scrobbler ?: ScrobbleManager(scope).also { scrobbler = it }
                 manager.minSongDuration = Prefs.scrobbleMinDuration.value
                 manager.scrobbleDelayPercent = Prefs.scrobbleDelayPercent.value
                 manager.scrobbleDelaySeconds = Prefs.scrobbleDelaySeconds.value
                 manager.useNowPlaying = Prefs.nowPlayingOn.value
                 manager.usePrimaryArtistOnly = Prefs.lastfmPrimaryArtistOnly.value
-                if (player.isPlaying) {
+                // Only a scrobbler that was just made is told what is playing; an existing
+                // one is already timing this song, and restarting it would delay or repeat
+                // the scrobble.
+                if (fresh && player.isPlaying) {
                     manager.onPlayerStateChanged(true, player.currentMediaItem?.toScrobbleTrack(), player.duration.takeIf { it > 0 })
                 }
             }
@@ -210,10 +222,15 @@ class PlaybackService : MediaSessionService() {
     /** Lets the widget's star and Shuffle reach the player, as BitChord's notification commands do. */
     private inner class WidgetCommands : MediaSession.Callback {
         override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
-            val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
-                .add(SessionCommand(ACTION_TOGGLE_FAVORITE, Bundle.EMPTY))
-                .add(SessionCommand(ACTION_TOGGLE_SHUFFLE, Bundle.EMPTY))
-                .build()
+            // Like and Shuffle are this app's own (its widget and UI); other apps that
+            // connect for playback controls get the standard commands only.
+            val own = controller.packageName == packageName
+            val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon().apply {
+                if (own) {
+                    add(SessionCommand(ACTION_TOGGLE_FAVORITE, Bundle.EMPTY))
+                    add(SessionCommand(ACTION_TOGGLE_SHUFFLE, Bundle.EMPTY))
+                }
+            }.build()
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                 .setAvailableSessionCommands(commands)
                 .build()
@@ -288,6 +305,12 @@ class PlaybackService : MediaSessionService() {
         ListeningRecorder.onStopped()
         session?.player?.let { QueueStore.save(this, it) }
         publishWidgetState(playing = false)
+        // Tell the system equalizer this audio session is gone.
+        sendBroadcast(
+            Intent(AudioEffect.ACTION_CLOSE_AUDIO_EFFECT_CONTROL_SESSION)
+                .putExtra(AudioEffect.EXTRA_AUDIO_SESSION, audioSessionId)
+                .putExtra(AudioEffect.EXTRA_PACKAGE_NAME, packageName),
+        )
         session?.run {
             player.release()
             release()

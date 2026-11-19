@@ -113,6 +113,8 @@ class MediaWidgetPill : AppWidgetProvider() {
                 // placeholder disc rather than the previous track's picture.
                 lastDisc = disc
                 lastBody[id] = body
+                // A newer render is on its way if the state changed meanwhile.
+                if (MediaWidgetSnapshot.load(context) != snapshot) continue
                 manager.push(id, views(context, snapshot, disc, body))
             }
         }
@@ -186,7 +188,7 @@ class MediaWidgetPill : AppWidgetProvider() {
                 context.getString(if (snapshot.shuffleEnabled) R.string.shuffle_on else R.string.shuffle_off),
             )
 
-            val open = openPlayer(context)
+            val open = openPlayer(context, snapshot.hasTrack)
             views.setOnClickPendingIntent(R.id.widget_pill, open)
 
             if (snapshot.hasTrack) {
@@ -219,10 +221,10 @@ class MediaWidgetPill : AppWidgetProvider() {
             setInt(viewId, "setImageAlpha", alpha)
 
         /** Same intent as [MediaWidget]'s, and why it has no action is explained there. */
-        private fun openPlayer(context: Context): PendingIntent {
+        private fun openPlayer(context: Context, hasTrack: Boolean): PendingIntent {
             val intent = Intent(context, MainActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                .putExtra(MainActivity.EXTRA_OPEN_PLAYER, true)
+                .putExtra(MainActivity.EXTRA_OPEN_PLAYER, hasTrack)
             return PendingIntent.getActivity(
                 context,
                 REQUEST_OPEN_PLAYER,
@@ -263,6 +265,8 @@ class MediaWidgetPill : AppWidgetProvider() {
         private const val ALPHA_ENABLED = 255
         private const val ALPHA_DISABLED = 90
 
-        private const val REQUEST_OPEN_PLAYER = 0
+        // Not 0: the service's notification opens MainActivity with request code 0, and
+        // PendingIntents that differ only in extras are one and the same.
+        private const val REQUEST_OPEN_PLAYER = 1
     }
 }

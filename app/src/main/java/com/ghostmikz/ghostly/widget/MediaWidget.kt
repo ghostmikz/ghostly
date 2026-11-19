@@ -71,7 +71,15 @@ abstract class MediaWidget : AppWidgetProvider() {
         for (id in ids) lastArt.remove(id)
     }
 
+    /**
+     * The last of *this* provider's widgets went away. The caches are shared with
+     * the other sizes, so they are only dropped once no Ghostly widget is left.
+     */
     override fun onDisabled(context: Context) {
+        val manager = runCatching { AppWidgetManager.getInstance(context) }.getOrNull() ?: return
+        val left = listOf(MediaWidgetSquare::class.java, MediaWidgetWide::class.java, MediaWidgetPill::class.java)
+            .sumOf { runCatching { manager.getAppWidgetIds(ComponentName(context, it)).size }.getOrDefault(0) }
+        if (left > 0) return
         MediaWidgetArt.clear()
         lastArt.clear()
     }
@@ -217,6 +225,10 @@ abstract class MediaWidget : AppWidgetProvider() {
                 cornerRadiusPx = size.cornerRadiusPx,
             )
             lastArt[id] = art
+            // Renders overlap (every play, pause and skip starts one). If what to
+            // show changed while this one was drawing, a newer render is on its
+            // way; pushing this one now could land last and show the old state.
+            if (MediaWidgetSnapshot.load(context) != snapshot) return
             manager.push(id, views(context, snapshot, size, art))
         }
 
@@ -266,7 +278,7 @@ abstract class MediaWidget : AppWidgetProvider() {
             // touch, so this catches every pixel that isn't a button — including
             // the empty space either side of them in the band, which is over the
             // artwork and should behave like it.
-            val open = openPlayer(context)
+            val open = openPlayer(context, snapshot.hasTrack)
             views.setOnClickPendingIntent(R.id.widget_root, open)
 
             if (snapshot.hasTrack) {
@@ -322,10 +334,10 @@ abstract class MediaWidget : AppWidgetProvider() {
          * is the half of the relay that runs whenever the app was already alive.
          * An explicit component with no action always delivers.
          */
-        private fun openPlayer(context: Context): PendingIntent {
+        private fun openPlayer(context: Context, hasTrack: Boolean): PendingIntent {
             val intent = Intent(context, MainActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                .putExtra(MainActivity.EXTRA_OPEN_PLAYER, true)
+                .putExtra(MainActivity.EXTRA_OPEN_PLAYER, hasTrack)
             return PendingIntent.getActivity(
                 context,
                 REQUEST_OPEN_PLAYER,
@@ -459,7 +471,9 @@ abstract class MediaWidget : AppWidgetProvider() {
         /** What the placeholder composite is remembered under. */
         private const val KEY_NO_ARTWORK = "no-artwork"
 
-        private const val REQUEST_OPEN_PLAYER = 0
+        // Not 0: the service's notification opens MainActivity with request code 0, and
+        // PendingIntents that differ only in extras are one and the same.
+        private const val REQUEST_OPEN_PLAYER = 1
     }
 }
 

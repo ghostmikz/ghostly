@@ -21,8 +21,9 @@ object History {
     fun init(context: Context) {
         if (::file.isInitialized) return
         file = File(context.filesDir, "history.json")
-        runCatching {
-            val root = JSONObject(file.readText())
+        val text = SafeFiles.read(file) ?: return
+        val ok = runCatching {
+            val root = JSONObject(text)
             val plays = root.getJSONObject("plays")
             _stats.value = plays.keys().asSequence().associate { k ->
                 val o = plays.getJSONObject(k)
@@ -30,7 +31,8 @@ object History {
             }
             val fav = root.getJSONArray("favorites")
             _favorites.value = (0 until fav.length()).map { fav.getLong(it) }.toSet()
-        }
+        }.isSuccess
+        if (!ok) SafeFiles.setAside(file)
     }
 
     fun recordPlay(songId: Long) {
@@ -62,24 +64,26 @@ object History {
         return JSONObject().put("plays", plays).put("favorites", JSONArray(_favorites.value.toList()))
     }
 
-    fun importJson(root: JSONObject) {
+    /**
+     * Likes are imported through [Playlists] (they live in Liked) only when the
+     * backup has no playlists of its own; otherwise Liked comes from there.
+     */
+    fun importJson(root: JSONObject, likesFromHere: Boolean = true) {
         val plays = root.optJSONObject("plays") ?: JSONObject()
         _stats.value = plays.keys().asSequence().associate { k ->
             val o = plays.getJSONObject(k)
             k.toLong() to Stats(o.getInt("c"), o.getLong("t"))
         }
-        val fav = root.optJSONArray("favorites") ?: JSONArray()
-        _favorites.value = (0 until fav.length()).map { fav.getLong(it) }.toSet()
         save()
+        if (likesFromHere) {
+            val fav = root.optJSONArray("favorites") ?: JSONArray()
+            Playlists.replaceLiked((0 until fav.length()).map { fav.getLong(it) })
+        }
     }
 
     @Synchronized
     private fun save() {
-        val root = exportJson()
-        runCatching {
-            val tmp = File(file.parentFile, "history.json.tmp")
-            tmp.writeText(root.toString())
-            tmp.renameTo(file)
-        }
+        if (!::file.isInitialized) return
+        SafeFiles.write(file, exportJson().toString())
     }
 }

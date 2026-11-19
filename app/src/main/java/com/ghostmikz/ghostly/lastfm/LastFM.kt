@@ -1,6 +1,7 @@
 // Adapted from BitChord (https://github.com/kushagrasinghx/BitChord), GPLv3.
 package com.ghostmikz.ghostly.lastfm
 
+import kotlinx.serialization.json.jsonObject
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
@@ -283,12 +284,16 @@ object LastFM {
             }
 
         val responseText = response.bodyAsText()
+        // An error is a top-level "error" field, not the word anywhere in the body
+        // (a track or user literally called "error" is not a failure). Last.fm also
+        // sends its error JSON with 4xx statuses, and its message beats the status text.
+        val error = runCatching {
+            json.parseToJsonElement(responseText).jsonObject.takeIf { "error" in it }
+                ?.let { json.decodeFromString<LastFmError>(responseText) }
+        }.getOrNull()
+        if (error != null) throw LastFmException(error.error, error.message)
         if (!response.status.isSuccess()) {
             throw LastFmException(response.status.value, response.status.description)
-        }
-        if (responseText.contains("\"error\"")) {
-            val error = json.decodeFromString<LastFmError>(responseText)
-            throw LastFmException(error.error, error.message)
         }
         return responseText
     }

@@ -74,6 +74,13 @@ object ListeningRecorder {
             lastSampleAt = now
             playedThisTrack = 0L
             playCounted = false
+            resumeAnchor = false
+            return
+        }
+        if (resumeAnchor) {
+            // First tick after a pause: the time paused is not listening.
+            resumeAnchor = false
+            lastSampleAt = now
             return
         }
         val step = (now - lastSampleAt).coerceIn(0L, MAX_STEP_MS)
@@ -105,8 +112,22 @@ object ListeningRecorder {
      * than contribute: without it, a player paused for an afternoon would hand
      * [MAX_STEP_MS] of listening to whatever was on screen when it resumed.
      */
+    /**
+     * A pause (or a buffering stall or a seek): the clock is re-anchored at the
+     * next sample so the gap doesn't count, but the track's progress towards a
+     * play is kept. Only a track change ([onStopped]) starts that over.
+     */
+    @Synchronized
+    fun onPaused() {
+        resumeAnchor = true
+        ListeningStats.flush()
+    }
+
+    private var resumeAnchor = false
+
     @Synchronized
     fun onStopped() {
+        resumeAnchor = false
         currentId = null
         playedThisTrack = 0L
         playCounted = false

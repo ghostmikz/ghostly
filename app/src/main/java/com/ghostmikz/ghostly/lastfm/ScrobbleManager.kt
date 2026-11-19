@@ -85,6 +85,7 @@ class ScrobbleManager(
 
         if (scrobbleRemainingMillis <= 0) {
             scrobbleSong(song, resolvedDurationSeconds)
+            markScrobbled()
             return
         }
         scrobbleTimerStartedAt = System.currentTimeMillis()
@@ -92,7 +93,7 @@ class ScrobbleManager(
             scope.launch {
                 delay(scrobbleRemainingMillis)
                 scrobbleSong(song, resolvedDurationSeconds)
-                scrobbleJob = null
+                markScrobbled()
             }
     }
 
@@ -115,8 +116,15 @@ class ScrobbleManager(
                 delay(scrobbleRemainingMillis)
                 val durationSeconds = song.durationSeconds() ?: 0
                 scrobbleSong(song, durationSeconds)
-                scrobbleJob = null
+                markScrobbled()
             }
+    }
+
+    /** Nothing left to time: a resume or a settings change must not scrobble it again. */
+    private fun markScrobbled() {
+        scrobbleJob = null
+        scrobbleRemainingMillis = 0L
+        scrobbleTimerStartedAt = 0L
     }
 
     private fun stopScrobbleTimer() {

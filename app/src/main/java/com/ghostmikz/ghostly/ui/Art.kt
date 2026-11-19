@@ -38,8 +38,22 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 object ArtCache {
-    private val cache = object : LruCache<String, Bitmap>(64 * 1024 * 1024) {
-        override fun sizeOf(key: String, value: Bitmap) = value.byteCount
+    /**
+     * An eighth of what the system gives this app (the usual Android figure):
+     * about 32 MB on a 256 MB phone, 16 MB on an old 128 MB one, instead of a
+     * fixed 64 MB that a low-memory phone can't spare.
+     */
+    private var maxBytes = 32 * 1024 * 1024
+    private val cache by lazy {
+        object : LruCache<String, Bitmap>(maxBytes) {
+            override fun sizeOf(key: String, value: Bitmap) = value.byteCount
+        }
+    }
+
+    /** Sizes the cache from the phone's memory; called before the first cover is read. */
+    fun sizeFor(context: Context) {
+        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as? android.app.ActivityManager ?: return
+        maxBytes = (am.memoryClass * 1024 * 1024 / 8).coerceIn(8 * 1024 * 1024, 64 * 1024 * 1024)
     }
     private val missing = HashSet<String>()
 
@@ -54,12 +68,17 @@ object ArtCache {
         return bmp
     }
 
+    /** A rescan may have found covers that were missing; let them be tried again. */
+    fun forgetMissing() = synchronized(missing) { missing.clear() }
+
     fun clear() {
         cache.evictAll()
         synchronized(missing) { missing.clear() }
     }
 
-    private fun key(song: Song, px: Int) = "${song.albumId}:$px"
+    // By album where there is one (one cover, many songs); by song where there
+    // isn't, or every song without an album would share the first one's picture.
+    private fun key(song: Song, px: Int) = if (song.albumId > 0) "${song.albumId}:$px" else "s${song.id}:$px"
 
     private fun decode(context: Context, song: Song, px: Int): Bitmap? {
         val cr = context.contentResolver
@@ -68,9 +87,18 @@ object ArtCache {
             runCatching { return cr.loadThumbnail(song.uri, Size(px, px), null) }
         }
         return runCatching {
+            // Bounds first, then a power-of-two sample size, so a 3000px folder
+            // cover is never decoded whole (36 MB) just to draw a 192px row.
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            cr.openInputStream(song.albumArtUri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+            if (bounds.outWidth <= 0) return null
+            var sample = 1
+            while (bounds.outWidth / (sample * 2) >= px && bounds.outHeight / (sample * 2) >= px) sample *= 2
+            val opts = BitmapFactory.Options().apply { inSampleSize = sample }
             cr.openInputStream(song.albumArtUri)?.use { input ->
-                val full = BitmapFactory.decodeStream(input) ?: return null
-                if (full.width <= px) full else Bitmap.createScaledBitmap(full, px, px * full.height / full.width, true)
+                val full = BitmapFactory.decodeStream(input, null, opts) ?: return null
+                if (full.width <= px) full
+                else Bitmap.createScaledBitmap(full, px, px * full.height / full.width, true).also { if (it !== full) full.recycle() }
             }
         }.getOrNull()
     }

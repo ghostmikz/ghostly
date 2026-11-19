@@ -146,7 +146,7 @@ object ListeningStats {
         if (song.id < 0) return
         val now = System.currentTimeMillis()
         val at = Instant.ofEpochMilli(now).atZone(ZoneId.systemDefault())
-        val dayKey = "${at.year}-${"%02d".format(at.monthValue)}-${"%02d".format(at.dayOfMonth)}"
+        val dayKey = at.toLocalDate().toString()
         val art = artRef(song)
         val albumName = song.album.takeIf { it.isNotBlank() && it != UNKNOWN_ALBUM }
         val albumId = song.albumId.takeIf { it >= 0 }?.toString()
@@ -245,24 +245,38 @@ object ListeningStats {
      * than re-serialising a month every time a track ticks over.
      */
     fun flush() {
-        pending()?.let { (key, snapshot) -> writer.launch { write(key, snapshot) } }
+        pending()?.let { p -> writer.launch { write(p) } }
     }
 
     /** As [flush], for a caller that is about to read back what it wrote. */
     private suspend fun flushAndAwait() {
-        pending()?.let { (key, snapshot) -> writer.launch { write(key, snapshot) }.join() }
+        pending()?.let { p -> writer.launch { write(p) }.join() }
     }
 
     /** The open month as bytes-to-be, or null when nothing has changed. */
-    private fun pending(): Pair<String, StoredBucket>? {
+    private fun pending(): Pending? {
         if (!ready) return null
         return synchronized(lock) {
             if (!dirty) return null
             val bucket = open ?: return null
             dirty = false
-            bucket.key to bucket.snapshot()
+            Pending(bucket.key, bucket.snapshot(), ++sequence)
         }
     }
+
+    /**
+     * A snapshot on its way to disk, numbered so the writer can tell an older
+     * one that lost the race for [writeLock] from a newer one, and skip it —
+     * and skip anything taken before an import replaced the files.
+     */
+    private class Pending(val key: String, val snapshot: StoredBucket, val seq: Long)
+
+    /** Guarded by [lock]. */
+    private var sequence = 0L
+
+    /** Guarded by [writeLock]: the newest snapshot written per month, and the import floor. */
+    private val writtenSeq = HashMap<String, Long>()
+    private var importFloor = 0L
 
     /**
      * Serialises a month and swaps it into place.
@@ -273,7 +287,11 @@ object ListeningStats {
      * Written aside and renamed, so a kill mid-write leaves the previous
      * month rather than a truncated one.
      */
-    private suspend fun write(key: String, snapshot: StoredBucket) = writeLock.withLock {
+    private suspend fun write(p: Pending) = writeLock.withLock {
+        val key = p.key
+        val snapshot = p.snapshot
+        if (p.seq <= importFloor || p.seq < (writtenSeq[key] ?: 0L)) return@withLock
+        writtenSeq[key] = p.seq
         runCatching {
             directory.mkdirs()
             val file = File(directory, "$key.json")
@@ -295,8 +313,8 @@ object ListeningStats {
         // The month rolled over mid-session. Whatever the last one still held
         // has to reach disk before it is dropped on the floor.
         open?.let { previous ->
-            val stale = previous.snapshot()
-            writer.launch { write(previous.key, stale) }
+            val stale = Pending(previous.key, previous.snapshot(), ++sequence)
+            writer.launch { write(stale) }
         }
         val loaded = read(key) ?: StoredBucket(month = key)
         return OpenBucket.of(key, loaded).also {
@@ -430,7 +448,7 @@ object ListeningStats {
         json.encodeToString(ListSerializer(StoredBucket.serializer()), exportAll())
 
     /** The other half of [exportJson]. */
-    fun importJson(text: String) {
+    suspend fun importJson(text: String) {
         importAll(json.decodeFromString(ListSerializer(StoredBucket.serializer()), text))
     }
 
@@ -441,9 +459,12 @@ object ListeningStats {
      * onto a new device, and two copies of the same month added together would
      * silently double every number on the page with no way to tell afterwards.
      */
-    fun importAll(buckets: List<StoredBucket>) {
-        if (!ready) return
+    suspend fun importAll(buckets: List<StoredBucket>) = writeLock.withLock {
+        if (!ready) return@withLock
         synchronized(lock) {
+            // Every save taken before now is older than the import: drop them.
+            importFloor = sequence
+            writtenSeq.clear()
             open = null
             dirty = false
             directory.listFiles()?.forEach { it.delete() }
@@ -548,7 +569,7 @@ object ListeningStats {
             addEntries(bucket)
             repeat(24) { hours[it] += bucket.hours.getOrElse(it) { 0L } }
             bucket.days.forEach { (day, ms) ->
-                val date = "${bucket.month}-%02d".format(day)
+                val date = String.format(Locale.ROOT, "%s-%02d", bucket.month, day)
                 days[date] = (days[date] ?: 0L) + ms
             }
             if (earliest == null || bucket.month < earliest!!) earliest = bucket.month
@@ -574,7 +595,7 @@ object ListeningStats {
             // Merge day-level sub-buckets for the flat days map and cross-month totals.
             addDaySubs(bucket)
             bucket.days.forEach { (day, ms) ->
-                val candidate = "${bucket.month}-%02d".format(day)
+                val candidate = String.format(Locale.ROOT, "%s-%02d", bucket.month, day)
                 val date = runCatching { LocalDate.parse(candidate) }.getOrNull() ?: return@forEach
                 if (date >= range.first && date <= range.second) {
                     days[candidate] = (days[candidate] ?: 0L) + ms
@@ -811,7 +832,7 @@ data class TrackEntry(
     }
 
     /** Sum ms/plays for days that fall within [range]. Falls back to full totals if .days is empty. */
-    fun weekRange(range: Pair<LocalDate, LocalDate>): Pair<Long, Int> = days.weekRange(range) ?: (ms to plays)
+    fun weekRange(range: Pair<LocalDate, LocalDate>): Pair<Long, Int> = days.weekRange(range) ?: (0L to 0)
 
     /** Enough of a [Song] to draw and find the track again. */
     fun toSong(): Song = Song(
@@ -864,7 +885,7 @@ data class NameEntry(
     }
 
     /** Sum ms/plays for days that fall within [range]. Falls back to full totals if .days is empty. */
-    fun weekRange(range: Pair<LocalDate, LocalDate>): Pair<Long, Int> = days.weekRange(range) ?: (ms to plays)
+    fun weekRange(range: Pair<LocalDate, LocalDate>): Pair<Long, Int> = days.weekRange(range) ?: (0L to 0)
 }
 
 /** The days in [range], summed; null when there is no per-day data at all. */

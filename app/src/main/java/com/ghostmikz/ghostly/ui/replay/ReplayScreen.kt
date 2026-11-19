@@ -60,7 +60,9 @@ import androidx.compose.ui.unit.sp
 import com.ghostmikz.ghostly.data.stats.ReplayPeriod
 import com.ghostmikz.ghostly.data.stats.ReplaySummary
 import com.ghostmikz.ghostly.data.stats.artRef
-import com.ghostmikz.ghostly.ui.ArtworkMeshBackdrop
+import com.ghostmikz.ghostly.ui.MeshGradientBackground
+import com.ghostmikz.ghostly.ui.rememberArtworkColors
+import com.ghostmikz.ghostly.ui.rotated
 import com.ghostmikz.ghostly.ui.GhostlyColors
 import com.ghostmikz.ghostly.ui.LocalPalette
 import com.ghostmikz.ghostly.ui.TopBarSpace
@@ -108,7 +110,7 @@ fun ReplayScreen(
 ) {
     val summary = state.summary
     val leadArtwork = summary?.songs?.firstOrNull()?.song?.let(::artRef)
-    val mesh = rememberReplayMesh(leadArtwork)
+    val palette = rememberArtworkColors(leadArtwork)
 
     // Library cards open this same page, but category cards should land on the
     // corresponding chart rather than making the user find it again. Wait for
@@ -131,7 +133,7 @@ fun ReplayScreen(
     }
 
     Box(modifier.fillMaxSize()) {
-        ArtworkMeshBackdrop(mesh, fallback = GhostlyColors.Background)
+        MeshGradientBackground(palette = palette, trackKey = leadArtwork, animated = false)
         // The mesh is built to sit behind a player, where the only thing over it
         // is a handful of large controls. A page of ranked lists needs a good
         // deal more separation than that, so most of it is put back under ink.
@@ -417,7 +419,9 @@ private fun LazyListScope.chart(
 ) {
     if (rows.isEmpty()) return
     item("$key-title") { SectionTitle(title, dark) }
-    items(rows, key = { "$key-${it.key}" }) { row ->
+    // The rank is part of the key: two albums can share a title and artist
+    // (MediaStore splits an untagged album by folder) and a key may not repeat.
+    items(rows, key = { "$key-${it.rank}-${it.key}" }) { row ->
         ReplayChartRow(row, circular, dark) { onClick(row.rank - 1) }
     }
     item("$key-gap") { Spacer(Modifier.height(20.dp)) }

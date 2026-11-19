@@ -42,7 +42,9 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ghostmikz.ghostly.R
-import com.ghostmikz.ghostly.ui.ArtworkMeshBackdrop
+import com.ghostmikz.ghostly.ui.MeshGradientBackground
+import com.ghostmikz.ghostly.ui.rememberArtworkColors
+import com.ghostmikz.ghostly.ui.rotated
 import java.util.Locale
 
 /**
@@ -86,7 +88,7 @@ fun ReplayCreditCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val mesh = rememberReplayMesh(artwork)
+    val palette = rememberArtworkColors(artwork)
     Box(
         modifier = modifier
             .aspectRatio(CARD_RATIO)
@@ -94,7 +96,12 @@ fun ReplayCreditCard(
             .clip(CardShape)
             .clickable(onClick = onClick),
     ) {
-        ArtworkMeshBackdrop(mesh)
+        MeshGradientBackground(
+            palette = palette,
+            trackKey = artwork ?: label,
+            blurRadius = 34.dp,
+            animated = false,
+        )
         // Deepened towards the foot, where the embossed lines are: the mesh is
         // built to be bright and those lines are pale, and without this the
         // cardholder name lands on whichever blob happened to drift under it.

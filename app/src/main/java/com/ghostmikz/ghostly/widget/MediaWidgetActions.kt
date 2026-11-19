@@ -12,6 +12,7 @@ import android.os.Handler
 import android.os.Looper
 import androidx.core.content.ContextCompat
 import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionToken
@@ -56,15 +57,30 @@ class MediaWidgetActions : BroadcastReceiver() {
 
         future.addListener(
             {
-                runCatching { future.get() }.getOrNull()?.let { controller ->
-                    runCatching { controller.execute(action) }
-                }
                 // Not released on the spot. The command has been sent, but the
                 // service still has a stream to resolve before it goes foreground
                 // and can hold itself up; dropping the last binding inside that
                 // window is how a tap on play ends with a service that shut down
                 // instead of one that started playing.
-                handler.postDelayed(::release, SETTLE_MS)
+                val controller = runCatching { future.get() }.getOrNull()
+                when {
+                    controller == null -> handler.postDelayed(::release, SETTLE_MS)
+                    controller.mediaItemCount > 0 -> {
+                        runCatching { controller.execute(action) }
+                        handler.postDelayed(::release, SETTLE_MS)
+                    }
+                    // A service just started for this tap is still putting the saved
+                    // queue back (a library query). Wait for it rather than dropping
+                    // the tap; GIVE_UP_MS still bounds the wait.
+                    else -> controller.addListener(object : Player.Listener {
+                        override fun onTimelineChanged(timeline: Timeline, reason: Int) {
+                            if (controller.mediaItemCount == 0) return
+                            controller.removeListener(this)
+                            runCatching { controller.execute(action) }
+                            handler.postDelayed(::release, SETTLE_MS)
+                        }
+                    })
+                }
             },
             ContextCompat.getMainExecutor(app),
         )

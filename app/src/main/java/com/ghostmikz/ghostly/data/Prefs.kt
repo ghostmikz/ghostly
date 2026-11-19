@@ -52,6 +52,8 @@ class FloatPref internal constructor(private val key: String, private val defaul
 /** Small settings store shared by the UI and the playback service. */
 object Prefs {
     private lateinit var sp: SharedPreferences
+    private lateinit var account: SharedPreferences
+    private const val ACCOUNT_FILE = "ghostly_account"
 
     private val _lastfmUser = MutableStateFlow("")
     val lastfmUser: StateFlow<String> = _lastfmUser
@@ -127,18 +129,29 @@ object Prefs {
     fun init(context: Context) {
         if (::sp.isInitialized) return
         sp = context.applicationContext.getSharedPreferences("ghostly", Context.MODE_PRIVATE)
+        // The Last.fm sign-in lives in its own file, which the backup rules leave
+        // out of Google's cloud backup (res/xml/backup_rules.xml). Moved there
+        // from the main file once, for installs that had it there.
+        account = context.applicationContext.getSharedPreferences(ACCOUNT_FILE, Context.MODE_PRIVATE)
+        if (sp.contains("lastfm_session")) {
+            account.edit()
+                .putString("lastfm_user", sp.getString("lastfm_user", ""))
+                .putString("lastfm_session", sp.getString("lastfm_session", ""))
+                .apply()
+            sp.edit().remove("lastfm_user").remove("lastfm_session").apply()
+        }
         reload()
         if (lastfmAvailable) LastFM.initialize(BuildConfig.LASTFM_API_KEY, BuildConfig.LASTFM_SECRET)
     }
 
     private fun reload() {
-        _lastfmUser.value = sp.getString("lastfm_user", "").orEmpty()
+        _lastfmUser.value = account.getString("lastfm_user", "").orEmpty()
         _theme.value = sp.getString("theme", "system") ?: "system"
         all.forEach { it.load(sp) }
         numbers.forEach { it.load(sp) }
         floats.forEach { it.load(sp) }
         if (!scrobbleOn.value && nowPlayingOn.value) nowPlayingOn.set(false)
-        LastFM.sessionKey = sp.getString("lastfm_session", null)?.takeIf { it.isNotBlank() }
+        LastFM.sessionKey = account.getString("lastfm_session", null)?.takeIf { it.isNotBlank() }
     }
 
     internal fun edit(block: SharedPreferences.Editor.() -> Unit) = sp.edit().apply(block).apply()
@@ -146,14 +159,14 @@ object Prefs {
     fun linkLastfm(user: String, sessionKey: String) {
         LastFM.sessionKey = sessionKey
         _lastfmUser.value = user
-        edit { putString("lastfm_user", user); putString("lastfm_session", sessionKey) }
+        account.edit().putString("lastfm_user", user).putString("lastfm_session", sessionKey).apply()
         lastfmEnabled.set(true)
     }
 
     fun unlinkLastfm() {
         LastFM.sessionKey = null
         _lastfmUser.value = ""
-        edit { remove("lastfm_user"); remove("lastfm_session") }
+        account.edit().remove("lastfm_user").remove("lastfm_session").apply()
         lastfmEnabled.set(false)
         scrobbleOn.set(false)
         nowPlayingOn.set(false)

@@ -99,9 +99,13 @@ private enum class Page(val title: String) {
 }
 
 @Composable
-fun SettingsScreen(songCount: Int, onRescan: () -> Unit, bottomPad: Dp, onBack: () -> Unit) {
+fun SettingsScreen(
+    songCount: Int, onRescan: () -> Unit, bottomPad: Dp, onBack: () -> Unit,
+    /** The player or a story is over Settings: back belongs to that, not to a sub-page. */
+    covered: Boolean = false,
+) {
     var page by rememberSaveable { mutableStateOf(Page.Main) }
-    BackHandler(enabled = page != Page.Main) { page = Page.Main }
+    BackHandler(enabled = page != Page.Main && !covered) { page = Page.Main }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = bottomPad)) {
         TopBarSpace()
@@ -138,7 +142,7 @@ private fun MainPage(songCount: Int, open: (Page) -> Unit) {
         Entry(Icons.Outlined.Brush, "Appearance", "liquid glass glass performance theme dark mode light mode system reduce animation blur blend colors full-screen cover art album", Page.Appearance),
         Entry(Icons.Outlined.LibraryMusic, "Local Music", "rescan scan library songs folders filter non-music recordings wav", Page.Local),
         Entry(Icons.Outlined.Storage, "Storage", "clear image cache artwork space", Page.Storage),
-        Entry(Icons.Outlined.Inventory2, "Your data", "clear history favorites export import backup json", Page.Data),
+        Entry(Icons.Outlined.Inventory2, "Your data", "clear history liked favorites export import backup json", Page.Data),
         Entry(Icons.Outlined.MoreHoriz, "Miscellaneous", "swipe play next stop close recents hide volume status bar queue history playing from stats for nerds bitrate", Page.Misc),
     )
     val q = query.trim()
@@ -374,15 +378,26 @@ private fun DataPage() {
     }
     val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
-        val ok = runCatching {
-            val json = JSONObject(context.contentResolver.openInputStream(uri)!!.use { it.readBytes().decodeToString() })
-            require(json.optString("app") == "ghostly")
-            json.optJSONObject("settings")?.let(Prefs::importJson)
-            json.optJSONObject("history")?.let(History::importJson)
-            json.optJSONObject("playlists")?.let(com.ghostmikz.ghostly.data.Playlists::importJson)
-            json.optJSONArray("listening")?.let { ListeningStats.importJson(it.toString()) }
-        }.isSuccess
-        Toast.makeText(context, if (ok) "Data imported" else "That file is not a Ghostly export", Toast.LENGTH_SHORT).show()
+        scope.launch {
+            // Read and checked off the main thread before anything is changed, so a
+            // bad file leaves this phone's data exactly as it was.
+            val json = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching {
+                    JSONObject(context.contentResolver.openInputStream(uri)!!.use { it.readBytes().decodeToString() })
+                        .takeIf { it.optString("app") == "ghostly" }
+                }.getOrNull()
+            }
+            val ok = json != null && runCatching {
+                val playlists = json.optJSONObject("playlists")
+                json.optJSONObject("settings")?.let(Prefs::importJson)
+                json.optJSONObject("history")?.let { History.importJson(it, likesFromHere = playlists == null) }
+                playlists?.let(com.ghostmikz.ghostly.data.Playlists::importJson)
+                json.optJSONArray("listening")?.let { l ->
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { ListeningStats.importJson(l.toString()) }
+                }
+            }.isSuccess
+            Toast.makeText(context, if (ok) "Data imported" else "That file is not a Ghostly export", Toast.LENGTH_SHORT).show()
+        }
     }
     Spacer(Modifier.height(12.dp))
     Card {
@@ -396,14 +411,14 @@ private fun DataPage() {
     Spacer(Modifier.height(20.dp))
     Card {
         NavRow(Icons.Rounded.History, "Clear listening history", countText(stats.size, "song") + " in history", chevron = false) { ask = "history" }
-        NavRow(Icons.Outlined.StarOutline, "Clear favorites", countText(favs.size, "song") + " starred", last = true, chevron = false) { ask = "favorites" }
+        NavRow(Icons.Outlined.StarOutline, "Clear liked songs", countText(favs.size, "song") + " liked", last = true, chevron = false) { ask = "favorites" }
     }
-    Note("Your history and favorites only live on this phone. They are used for Home (Recently Played, Most Played). Exports leave out your Last.fm sign-in.")
+    Note("Your history and liked songs only live on this phone. They are used for Home (Recently Played, Most Played). Exports leave out your Last.fm sign-in.")
 
     when (ask) {
         "history" -> Confirm("Clear listening history?", "Recently Played and Most Played start over.", "Clear",
             onConfirm = { History.clearHistory(); ask = null }, onDismiss = { ask = null })
-        "favorites" -> Confirm("Clear favorites?", "All stars are removed.", "Clear",
+        "favorites" -> Confirm("Clear liked songs?", "Liked is emptied. Your other playlists stay.", "Clear",
             onConfirm = { History.clearFavorites(); ask = null }, onDismiss = { ask = null })
     }
 }

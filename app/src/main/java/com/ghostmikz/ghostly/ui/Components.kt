@@ -241,7 +241,7 @@ fun <T> Shelf(title: String, items: List<T>, key: (T) -> Any, card: @Composable 
     }
 }
 
-/** Plain row with an icon, label and chevron (Library's "Favorites", "Recently Played"). */
+/** Plain row with an icon, label and chevron (Library's "Liked", "Recently Played"). */
 @Composable
 fun NavRow(icon: ImageVector, label: String, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -509,7 +509,7 @@ fun SongMenuItems(song: Song, actions: LibraryActions, onDismiss: () -> Unit) {
     item("Play next", BitChordIcons.Queue) { actions.playNext(song) }
     item("Add to playlist", BitChordIcons.Plus) { actions.addToPlaylist(song) }
     actions.removeFromPlaylist?.let { remove -> item("Remove from playlist", BitChordIcons.Library) { remove(song) } }
-    item(if (fav) "Remove from favorites" else "Add to favorites", if (fav) BitChordIcons.StarFilled else BitChordIcons.Star) {
+    item(if (fav) "Remove from Liked" else "Like", if (fav) BitChordIcons.StarFilled else BitChordIcons.Star) {
         com.ghostmikz.ghostly.data.History.toggleFavorite(song.id)
     }
     item("Go to album", BitChordIcons.Library) { actions.openAlbum(song.albumId) }
@@ -523,16 +523,19 @@ val LocalIsPlaying = androidx.compose.runtime.staticCompositionLocalOf { true }
 @Composable
 fun EqBars(modifier: Modifier = Modifier, color: Color = GhostlyColors.Text) {
     val moving = LocalIsPlaying.current
-    val t = rememberInfiniteTransition(label = "eq")
-    val phase by t.animateFloat(
-        0f, 1f,
-        infiniteRepeatable(tween(900, easing = LinearEasing)),
-        label = "eqPhase",
-    )
+    // Only ticks while playing: paused bars are still, so nothing should keep
+    // drawing frames for them. Read in the draw block, so it redraws, not recomposes.
+    val phase = remember { androidx.compose.animation.core.Animatable(0f) }
+    LaunchedEffect(moving) {
+        while (moving) {
+            phase.snapTo(0f)
+            phase.animateTo(1f, tween(900, easing = LinearEasing))
+        }
+    }
     Canvas(modifier) {
         val bar = size.width / 5
         listOf(0f, 0.33f, 0.66f).forEachIndexed { i, offset ->
-            val wave = if (moving) kotlin.math.abs(kotlin.math.sin((phase + offset) * Math.PI)).toFloat() else 0.25f + 0.25f * i
+            val wave = if (moving) kotlin.math.abs(kotlin.math.sin((phase.value + offset) * Math.PI)).toFloat() else 0.25f + 0.25f * i
             val h = size.height * (0.35f + 0.65f * wave)
             drawRoundRect(
                 color, Offset(bar * (i * 2), size.height - h),

@@ -34,7 +34,7 @@ import kotlin.random.Random
 private data class Mix(val label: String, val title: String, val text: String, val color: Color, val songs: List<Song>, val shuffle: Boolean)
 
 @Composable
-fun HomeScreen(library: Library, actions: LibraryActions, bottomPad: Dp) {
+fun HomeScreen(library: Library, actions: LibraryActions, bottomPad: Dp, loading: Boolean = false) {
     val stats by History.stats.collectAsState()
     val favIds by History.favorites.collectAsState()
     val songs = library.songs
@@ -59,7 +59,7 @@ fun HomeScreen(library: Library, actions: LibraryActions, bottomPad: Dp) {
     val mixes = buildList {
         add(Mix("Mix for You", "Shuffle All", "Every song on this phone, in a random order.", Color(0xFF33AEF0), songs, true))
         if (most.size >= 3) add(Mix("Made from your plays", "On Repeat", "The songs you keep coming back to.", Color(0xFF8E5BF0), most, false))
-        if (favorites.isNotEmpty()) add(Mix("Starred by you", "Favorites", "${countText(favorites.size, "song")} you starred.", GhostlyColors.Accent, favorites, true))
+        if (favorites.isNotEmpty()) add(Mix("Liked by you", "Liked", "${countText(favorites.size, "song")} you liked.", GhostlyColors.Accent, favorites, true))
         add(Mix("Fresh on your phone", "Recently Added", "The newest files in your library.", Color(0xFF2FB874), added, false))
     }
 
@@ -68,7 +68,8 @@ fun HomeScreen(library: Library, actions: LibraryActions, bottomPad: Dp) {
             TopBarSpace()
             BigTitle("Listen Now")
         }
-        if (songs.isEmpty()) {
+        // Not while the library is still being read: that is not "no music".
+        if (songs.isEmpty() && !loading) {
             item {
                 Text("No music on this phone yet. Copy some audio files (for example into the Music folder) and they show up here.",
                     color = GhostlyColors.TextSecondary, fontSize = 16.sp, modifier = Modifier.padding(16.dp))

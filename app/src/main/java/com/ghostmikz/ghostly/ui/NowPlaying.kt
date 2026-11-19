@@ -1,5 +1,9 @@
 package com.ghostmikz.ghostly.ui
 
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import android.content.Context
 import android.media.AudioManager
 import android.os.Build
@@ -165,8 +169,15 @@ fun NowPlayingScreen(
                             .createOutline(size, layoutDirection, density)
                 }
             }
+            // Everything under the cover (title, seek bar, transport, volume, bottom
+            // row) needs about 480dp, more with large text. On a short screen the
+            // cover gives way instead of pushing the bottom row off the screen.
+            val config = androidx.compose.ui.platform.LocalConfiguration.current
+            val coverMax = (config.screenHeightDp - 300 - 180 * config.fontScale).coerceAtLeast(140f).dp
             Box(
-                Modifier.then(if (fullCover) Modifier else Modifier.padding(horizontal = 28.dp))
+                Modifier.align(Alignment.CenterHorizontally)
+                    .then(if (fullCover) Modifier else Modifier.padding(horizontal = 28.dp))
+                    .widthIn(max = coverMax)
                     .fillMaxWidth().aspectRatio(1f)
                     .onGloballyPositioned { coverCoords = it }
                     // BitChord's dock: the cover is *laid out* (not scaled) between the mini player's
@@ -214,7 +225,7 @@ fun NowPlayingScreen(
                         modifier = Modifier.clickable { song?.let { onClose(); actions.openArtist(it.artist) } })
                 }
                 val fav = song != null && song.id in favs
-                RoundGlassButton(if (fav) BitChordIcons.StarFilled else BitChordIcons.Star, "Favorite") {
+                RoundGlassButton(if (fav) BitChordIcons.StarFilled else BitChordIcons.Star, if (fav) "Remove from Liked" else "Like") {
                     song?.let { History.toggleFavorite(it.id) }
                 }
                 Spacer(Modifier.width(12.dp))
@@ -307,7 +318,9 @@ private fun Transport(icon: Int, description: String, size: Dp, onClick: () -> U
     val scale by animateFloatAsState(if (pressed && motion) 0.82f else 1f, spring(dampingRatio = 0.5f, stiffness = 600f), label = "press")
     Icon(
         painterResource(icon), description, tint = Color.White,
-        modifier = Modifier.size(size).scale(scale).pointerInput(onClick) {
+        modifier = Modifier.size(size).scale(scale)
+            .semantics { role = Role.Button; onClick { onClick(); true } }
+            .pointerInput(onClick) {
             detectTapGestures(onPress = { pressed = true; tryAwaitRelease(); pressed = false }, onTap = { tick(); onClick() })
         },
     )
@@ -459,7 +472,7 @@ private fun rememberStats(song: com.ghostmikz.ghostly.data.Song): String {
                         "ogg" in mime || "vorbis" in mime -> "OGG"; "opus" in mime -> "OPUS"; "wav" in mime -> "WAV"
                         else -> mime.substringAfter('/').uppercase()
                     }
-                    listOfNotNull(format, kbps?.let { "$it kbps" }, hz?.let { "%.1f kHz".format(it / 1000f) }).joinToString(" · ")
+                    listOfNotNull(format, kbps?.let { "$it kbps" }, hz?.let { String.format(java.util.Locale.US, "%.1f kHz", it / 1000f) }).joinToString(" · ")
                 } finally { r.release() }
             }.getOrDefault("")
         }

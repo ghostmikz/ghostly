@@ -69,7 +69,9 @@ import androidx.compose.ui.unit.sp
 import com.ghostmikz.ghostly.data.stats.ReplaySummary
 import com.ghostmikz.ghostly.data.stats.artRef
 import com.ghostmikz.ghostly.data.stats.artSong
-import com.ghostmikz.ghostly.ui.ArtworkMeshBackdrop
+import com.ghostmikz.ghostly.ui.MeshGradientBackground
+import com.ghostmikz.ghostly.ui.rememberArtworkColors
+import com.ghostmikz.ghostly.ui.rotated
 import com.ghostmikz.ghostly.ui.GhostlyColors
 import kotlinx.coroutines.launch
 
@@ -118,6 +120,9 @@ fun ReplayStories(
             when (page) {
                 ReplayStoryPage.ALBUMS -> summary.albums.isNotEmpty()
                 ReplayStoryPage.GENRES -> summary.genres.isNotEmpty()
+                // Local files with no artist tag leave nobody to rank; BitChord's
+                // tracks always carry one, so it never needs to skip this card.
+                ReplayStoryPage.ARTISTS -> summary.artists.isNotEmpty()
                 else -> true
             }
         }
@@ -251,7 +256,7 @@ private fun Stage(
 ) {
     // Rotated per card, so the backdrop is visibly a different colour on every
     // one — see [storyHue].
-    val mesh = rememberReplayMesh(artwork, storyHue(page))
+    val palette = rememberArtworkColors(artwork).rotated(storyHue(page))
     Box(
         Modifier
             .fillMaxSize()
@@ -276,7 +281,7 @@ private fun Stage(
     ) {
         // The soft colour behind everything, drawn from whatever the card is
         // about and rotated per card.
-        ArtworkMeshBackdrop(mesh, fallback = Color(0xFF17171A))
+        MeshGradientBackground(palette = palette, trackKey = page.name, animated = false)
         // Enough ink for white type, weighted to the top where the headline sits
         // and to the foot where the controls do.
         Box(

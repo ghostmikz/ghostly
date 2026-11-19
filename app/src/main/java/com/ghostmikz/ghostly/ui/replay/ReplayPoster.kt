@@ -73,8 +73,11 @@ suspend fun renderReplayPoster(
     val songs = summary.songRows(POSTER_ROWS)
     val artists = summary.artistRows(POSTER_ROWS)
     val albums = summary.albumRows(POSTER_ALBUMS)
-    val covers = (songs + artists + albums)
-        .mapNotNull { it.artwork }
+    // Plus everything a single card can draw: its five rows, and the cover its
+    // backdrop is lit from, which can come from anywhere in the pool.
+    val cardRows = summary.songRows(CARD_ROWS) + summary.artistRows(CARD_ROWS) + summary.albumRows(CARD_ROWS)
+    val litRef = page?.let { summary.storyArtwork(it) }
+    val covers = ((songs + artists + albums + cardRows).mapNotNull { it.artwork } + listOfNotNull(litRef))
         .distinct()
         .associateWith { url -> async(Dispatchers.IO) { loadBitmap(context, url) } }
         .mapValues { it.value.await() }
