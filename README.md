@@ -3,10 +3,11 @@
 A simple, offline music player for Android. It plays the audio files on your phone.
 The only online feature is optional Last.fm scrobbling.
 
-- Songs, albums, artists, folders, search
+- BitChord-style design: black theme, floating tab bar and mini player, Apple Music-like player
+- Home ("Listen Now") built from your own listening: recently played, most played, recently added
+- Library with songs, artists, albums, folders, favorites and search
 - Background playback with notification and lock-screen controls
-- Now-playing screen colored from the album art
-- Shuffle, repeat, queue, "play next"
+- Shuffle, repeat, queue, "play next", volume bar
 - Last.fm: sign in with your account, scrobble + "now playing"
 
 ## Build
@@ -27,5 +28,6 @@ Get the Last.fm key at https://www.last.fm/api/account/create (leave them empty 
 
 ## License
 
-GPLv3. The Last.fm client and scrobble logic are adapted from
+GPLv3. The design, icons and Last.fm client are adapted from
 [BitChord](https://github.com/kushagrasinghx/BitChord) (GPLv3).
+Font: [Inter](https://rsms.me/inter/) (SIL Open Font License).

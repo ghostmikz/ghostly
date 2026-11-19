@@ -29,6 +29,7 @@ data class PlayerState(
     val repeat: Int = Player.REPEAT_MODE_OFF,
     val queue: List<Song> = emptyList(),
     val queueIndex: Int = 0,
+    val from: String = "",
 )
 
 class PlayerViewModel(app: Application) : AndroidViewModel(app) {
@@ -41,6 +42,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
     private var controller: MediaController? = null
     private var byId: Map<String, Song> = emptyMap()
+    private var from = ""
 
     init {
         viewModelScope.launch {
@@ -81,12 +83,14 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             repeat = c.repeatMode,
             queue = queue,
             queueIndex = c.currentMediaItemIndex,
+            from = from,
         )
     }
 
-    fun play(songs: List<Song>, start: Int = 0, shuffle: Boolean = false) {
+    fun play(songs: List<Song>, start: Int = 0, shuffle: Boolean = false, from: String = "") {
         val c = controller ?: return
         if (songs.isEmpty()) return
+        this.from = from
         c.shuffleModeEnabled = shuffle
         val first = if (shuffle) songs.indices.random() else start
         c.setMediaItems(songs.map { it.toMediaItem() }, first, 0)
@@ -115,7 +119,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
     fun playNext(song: Song) = controller?.let { c ->
-        if (c.mediaItemCount == 0) play(listOf(song)) else c.addMediaItem(c.currentMediaItemIndex + 1, song.toMediaItem())
+        if (c.mediaItemCount == 0) play(listOf(song), from = song.title) else c.addMediaItem(c.currentMediaItemIndex + 1, song.toMediaItem())
     }
 
     override fun onCleared() {

@@ -10,6 +10,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import com.ghostmikz.tune.MainActivity
+import com.ghostmikz.tune.data.History
 import com.ghostmikz.tune.data.Prefs
 import com.ghostmikz.tune.lastfm.ScrobbleManager
 import com.ghostmikz.tune.lastfm.ScrobbleTrack
@@ -23,10 +24,12 @@ class PlaybackService : MediaSessionService() {
     private var session: MediaSession? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private lateinit var scrobbler: ScrobbleManager
+    private var recorded = false // has the current track been added to History yet
 
     override fun onCreate() {
         super.onCreate()
         Prefs.init(this)
+        History.init(this)
         scrobbler = ScrobbleManager(scope, { Prefs.scrobble.value }, { Prefs.nowPlaying.value })
 
         val player = ExoPlayer.Builder(this)
@@ -44,10 +47,18 @@ class PlaybackService : MediaSessionService() {
         player.addListener(object : Player.Listener {
             override fun onMediaItemTransition(item: MediaItem?, reason: Int) {
                 scrobbler.onTrackChanged(item?.toScrobbleTrack(), player.isPlaying)
+                recorded = false
+                if (player.isPlaying) record(item)
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 scrobbler.onPlayingChanged(isPlaying)
+                if (isPlaying) record(player.currentMediaItem)
+            }
+
+            private fun record(item: MediaItem?) {
+                if (recorded) return
+                item?.mediaId?.toLongOrNull()?.let { History.recordPlay(it); recorded = true }
             }
         })
 
