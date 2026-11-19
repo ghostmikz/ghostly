@@ -60,6 +60,9 @@ private val LIB_TABS = listOf("Songs", "Artists", "Albums", "Playlists", "Folder
 @Composable
 fun TopBarSpace() = Spacer(Modifier.height(68.dp))
 
+/** The Library's Songs/Artists/Albums/... tab, remembered while the app runs. */
+private val libraryTab = androidx.compose.runtime.mutableIntStateOf(0)
+
 @Composable
 fun LibraryScreen(
     library: Library,
@@ -69,7 +72,9 @@ fun LibraryScreen(
     /** BitChord's way in to Replay: its row of headline cards at the head of the Library. */
     replay: @Composable () -> Unit = {},
 ) {
-    var tab by rememberSaveable { mutableIntStateOf(0) }
+    // Kept for the whole app session (not just this composition), so the tab
+    // is still the chosen one after visiting a page or the other tabs.
+    var tab by libraryTab
     val songs = library.songs
     val header: @Composable () -> Unit = {
         Column {

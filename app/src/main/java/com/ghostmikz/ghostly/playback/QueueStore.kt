@@ -15,8 +15,11 @@ internal object QueueStore {
 
     fun save(context: Context, player: Player) {
         val count = player.mediaItemCount
+        // An empty player is one that hasn't restored yet (a service the system
+        // restarted and stopped again within a second), never a choice to forget
+        // the queue: saving it would wipe the queue that is still there to restore.
+        if (count == 0) return
         val sp = prefs(context)
-        if (count == 0) { sp.edit().clear().apply(); return }
         val current = player.currentMediaItemIndex.coerceIn(0, count - 1)
         val from = (current - LIMIT / 2).coerceIn(0, maxOf(0, count - LIMIT))
         val until = minOf(count, from + LIMIT)
