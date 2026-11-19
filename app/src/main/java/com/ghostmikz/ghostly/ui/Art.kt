@@ -90,13 +90,13 @@ fun rememberArt(song: Song?, px: Int): Bitmap? {
 fun AlbumArt(song: Song?, modifier: Modifier = Modifier, corner: Dp = 8.dp, px: Int = 192) {
     val bmp = rememberArt(song, px)
     Box(
-        modifier.clip(RoundedCornerShape(corner)).background(Color(0xFF1C1C1E)),
+        modifier.clip(RoundedCornerShape(corner)).background(GhostlyColors.Card),
         contentAlignment = Alignment.Center,
     ) {
         if (bmp != null) {
             Image(bmp.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
         } else {
-            Icon(com.ghostmikz.ghostly.ui.icons.BitChordIcons.MusicNote, null, Modifier.fillMaxWidth(0.34f).fillMaxHeight(0.34f), tint = Color(0xFF5A5A5E))
+            Icon(com.ghostmikz.ghostly.ui.icons.BitChordIcons.MusicNote, null, Modifier.fillMaxWidth(0.34f).fillMaxHeight(0.34f), tint = GhostlyColors.PlaceholderIcon)
         }
     }
 }

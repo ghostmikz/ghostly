@@ -1,6 +1,47 @@
 package com.ghostmikz.ghostly
 
 import android.Manifest
+import com.ghostmikz.ghostly.data.Song
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
+import androidx.compose.foundation.border
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ChevronLeft
+import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material3.Icon
+import androidx.compose.foundation.LocalOverscrollFactory
+import androidx.compose.runtime.collectAsState
+import com.ghostmikz.ghostly.ui.backdrop.backdrops.layerBackdrop
+import com.ghostmikz.ghostly.ui.backdrop.backdrops.rememberLayerBackdrop
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.SharedTransitionLayout
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.unit.IntOffset
+import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
+import android.app.Activity
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -12,10 +53,6 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -38,6 +75,15 @@ import com.ghostmikz.ghostly.data.History
 import com.ghostmikz.ghostly.data.Prefs
 import com.ghostmikz.ghostly.ui.*
 import com.ghostmikz.ghostly.ui.icons.BitChordIcons
+import com.ghostmikz.ghostly.data.stats.ListeningStats
+import com.ghostmikz.ghostly.ui.replay.LibraryReplayEntry
+import com.ghostmikz.ghostly.ui.replay.ReplayScreen
+import com.ghostmikz.ghostly.ui.replay.ReplayShareSheet
+import com.ghostmikz.ghostly.ui.replay.ReplayStories
+import com.ghostmikz.ghostly.ui.replay.ReplayStoryPage
+import com.ghostmikz.ghostly.ui.replay.cards
+import com.ghostmikz.ghostly.ui.replay.rememberReplayState
+import com.ghostmikz.ghostly.ui.replay.replayHolder
 
 private sealed interface Screen {
     data object Settings : Screen
@@ -46,6 +92,8 @@ private sealed interface Screen {
     data class AlbumScreen(val id: Long) : Screen
     data class ArtistScreen(val name: String) : Screen
     data class FolderScreen(val path: String) : Screen
+    data class PlaylistScreen(val id: String) : Screen
+    data class Replay(val landing: ReplayStoryPage) : Screen
 }
 
 private val audioPermission =
@@ -62,7 +110,27 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         Prefs.init(this)
         History.init(this)
+        com.ghostmikz.ghostly.data.Playlists.init(this)
+        ListeningStats.init(this)
+        if (savedInstanceState == null) takeOpenPlayer(intent)
         setContent { GhostlyTheme { App(vm) } }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        takeOpenPlayer(intent)
+    }
+
+    /** A tap on a home-screen widget asks for the full player (BitChord's PlayerDeepLink). */
+    private fun takeOpenPlayer(intent: Intent?) {
+        if (intent?.getBooleanExtra(EXTRA_OPEN_PLAYER, false) != true) return
+        intent.removeExtra(EXTRA_OPEN_PLAYER)
+        openPlayerPending.value = true
+    }
+
+    companion object {
+        const val EXTRA_OPEN_PLAYER = "com.ghostmikz.ghostly.OPEN_PLAYER"
+        internal val openPlayerPending = kotlinx.coroutines.flow.MutableStateFlow(false)
     }
 }
 
@@ -90,20 +158,33 @@ private fun App(vm: PlayerViewModel) {
 @Composable
 private fun PermissionScreen(onAllow: () -> Unit) {
     Column(Modifier.fillMaxSize().systemBarsPadding().padding(28.dp), verticalArrangement = Arrangement.Bottom) {
-        Text("Your music,\nright here.", color = Color.White, fontSize = 40.sp, fontWeight = FontWeight.ExtraBold,
+        Text("Your music,\nright here.", color = GhostlyColors.Text, fontSize = 40.sp, fontWeight = FontWeight.ExtraBold,
             letterSpacing = (-1).sp, lineHeight = 44.sp)
         Spacer(Modifier.height(12.dp))
         Text("Ghostly plays the audio files on this phone. Allow access to your music to get started.",
             color = GhostlyColors.TextSecondary, fontSize = 17.sp)
         Spacer(Modifier.height(32.dp))
         Box(
-            Modifier.fillMaxWidth().height(54.dp).clip(CircleShape).background(Color.White).clickable(onClick = onAllow),
+            Modifier.fillMaxWidth().height(54.dp).clip(CircleShape).background(GhostlyColors.Text).clickable(onClick = onAllow),
             contentAlignment = Alignment.Center,
-        ) { Text("Allow access", color = Color.Black, fontSize = 18.sp, fontWeight = FontWeight.SemiBold) }
+        ) { Text("Allow access", color = GhostlyColors.Background, fontSize = 18.sp, fontWeight = FontWeight.SemiBold) }
         Spacer(Modifier.height(16.dp))
     }
 }
 
+/** What the content area shows: a tab, or a page pushed on top of it. */
+/** Stand-in for "no song": the picker was opened to make a new playlist. */
+private val NEW_PLAYLIST = com.ghostmikz.ghostly.data.Song(-1, "", "", "", -1, 0, 0, 0, 0, "")
+
+private data class Page(val tab: Int, val depth: Int, val screen: Screen?)
+
+private val TABS = listOf(
+    TabItem("Home", BitChordIcons.Home),
+    TabItem("Library", BitChordIcons.TabLibrary),
+    TabItem("Search", BitChordIcons.TabSearch),
+)
+
+@OptIn(ExperimentalSharedTransitionApi::class, androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 private fun Main(vm: PlayerViewModel) {
     val library by vm.library.collectAsStateWithLifecycle()
@@ -112,9 +193,13 @@ private fun Main(vm: PlayerViewModel) {
     val favIds by History.favorites.collectAsStateWithLifecycle()
     var tab by rememberSaveable { mutableIntStateOf(0) }
     val stack = remember { mutableStateListOf<Screen>() }
-    var playerOpen by rememberSaveable { mutableStateOf(false) }
+    val motion = motionOn()
+    val scope = rememberCoroutineScope()
 
     val back: () -> Unit = { if (stack.isNotEmpty()) stack.removeAt(stack.lastIndex) }
+    // BitChord's "Add to playlist" sheet, for a song or (NEW_PLAYLIST) to make a playlist.
+    var pickerFor by remember { mutableStateOf<Song?>(null) }
+    var pickerOpen by remember { mutableStateOf(false) }
     val actions = remember(vm) {
         LibraryActions(
             play = { songs, i, shuffle, from -> vm.play(songs, i, shuffle, from) },
@@ -122,35 +207,156 @@ private fun Main(vm: PlayerViewModel) {
             openAlbum = { stack += Screen.AlbumScreen(it) },
             openArtist = { stack += Screen.ArtistScreen(it) },
             openFolder = { stack += Screen.FolderScreen(it) },
-            openFavorites = { stack += Screen.Favorites },
+            openFavorites = { stack += Screen.PlaylistScreen(com.ghostmikz.ghostly.data.Playlists.LIKED_ID) },
             openRecent = { stack += Screen.Recent },
             openSettings = { stack += Screen.Settings },
             back = back,
+            openPlaylist = { stack += Screen.PlaylistScreen(it) },
+            addToPlaylist = { pickerFor = it ?: NEW_PLAYLIST; pickerOpen = true },
         )
     }
 
-    BackHandler(enabled = playerOpen) { playerOpen = false }
+    // ---- player sheet: 0 = fully open, 1 = closed. It follows the finger while dragged. ----
+    var playerOpen by rememberSaveable { mutableStateOf(false) }
+    val sheet = remember { Animatable(if (playerOpen) 0f else 1f) }
+    // Where the mini player's cover is, for the player's cover to fly to and from (BitChord's PlayerDock).
+    var miniArtCoords by remember { mutableStateOf<androidx.compose.ui.layout.LayoutCoordinates?>(null) }
+    fun settle(open: Boolean, velocity: Float = 0f) {
+        playerOpen = open
+        scope.launch { sheet.animateTo(if (open) 0f else 1f, ghostSpring(motion, 1f, 195f), initialVelocity = velocity) }
+    }
+
+    // ---- Replay (BitChord): one set of numbers for the Library cards, the page and the stories ----
+    var replayStory by remember { mutableStateOf<ReplayStoryPage?>(null) }
+    var replayShare by remember { mutableStateOf<ReplayStoryPage?>(null) }
+    var showReplayShare by remember { mutableStateOf(false) }
+    val replayOpen = stack.lastOrNull() is Screen.Replay || replayStory != null || showReplayShare ||
+        (tab == 1 && stack.isEmpty())
+    val (replay, setReplayPeriod) = rememberReplayState(replayOpen)
+    val replayCards = remember(replay.summary) { replay.summary?.takeUnless { it.isEmpty }?.cards().orEmpty() }
+    val lastfmUser by Prefs.lastfmUser.collectAsStateWithLifecycle()
+    val replayHolderName = replayHolder(lastfmUser)
+
+    // Widget tap: open the player once there is a song to show.
+    val openPending by MainActivity.openPlayerPending.collectAsStateWithLifecycle()
+    LaunchedEffect(openPending, state.current != null) {
+        if (openPending && state.current != null) {
+            MainActivity.openPlayerPending.value = false
+            if (!playerOpen) settle(true)
+        }
+    }
+
+    BackHandler(enabled = replayStory != null && !showReplayShare) { replayStory = null }
+    BackHandler(enabled = playerOpen) { settle(false) }
     BackHandler(enabled = !playerOpen && stack.isNotEmpty()) { back() }
     BackHandler(enabled = !playerOpen && stack.isEmpty() && tab != 0) { tab = 0 }
-    if (state.current == null && playerOpen) playerOpen = false
+    LaunchedEffect(state.current == null) { if (state.current == null && playerOpen) settle(false) }
+
+    val lightBars = !LocalPalette.current.isDark && sheet.value > 0.5f
+    val view = LocalView.current
+    SideEffect {
+        val window = (view.context as? Activity)?.window ?: return@SideEffect
+        WindowCompat.getInsetsController(window, view).apply {
+            isAppearanceLightStatusBars = lightBars
+            isAppearanceLightNavigationBars = lightBars
+        }
+    }
+
+    // ---- the tab bar shrinks to a bubble while scrolling down, and comes back on the way up ----
+    var collapsed by remember { mutableStateOf(false) }
+    val scrollWatch = remember {
+        object : NestedScrollConnection {
+            var run = 0f
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                val dy = available.y
+                if (dy * run < 0) run = 0f
+                run += dy
+                if (run < -60f) collapsed = true
+                if (run > 40f) collapsed = false
+                return Offset.Zero
+            }
+        }
+    }
+    val page = Page(tab, stack.size, stack.lastOrNull())
+    LaunchedEffect(page) { collapsed = false }
+    // Liquid Glass (BitChord): only the glass bar folds while scrolling; the default bar stays put.
+    val liquid = Prefs.liquidGlass.state.collectAsState().value && isGlassSupported()
+    val reduceBlur = Prefs.reduceBlur.state.collectAsState().value
+    val showCollapsed = liquid && collapsed && state.current != null
+    // The page is recorded into a layer that the frosted/glass bars sample. Not under
+    // "Reduce dynamic blur": then nothing samples it and the surfaces fill solid.
+    val record = isGlassSupported() && !reduceBlur
+    val pageColor = GhostlyColors.Background
+    val appBackdrop = rememberLayerBackdrop(onDraw = remember(pageColor) { { drawRect(pageColor); drawContent() } })
 
     val navBar = with(LocalDensity.current) { WindowInsets.navigationBars.getBottom(this).toDp() }
     // Space under the lists so the floating bars never cover the last row.
     val bottomPad = navBar + 8.dp + 64.dp + (if (state.current != null) 64.dp + 10.dp else 0.dp) + 24.dp
     val currentId = state.current?.id
 
-    Box(Modifier.fillMaxSize()) {
-        Box(Modifier.fillMaxSize().statusBarsPadding()) {
-            when (val top = stack.lastOrNull()) {
-                null -> when (tab) {
+    // BitChord's iPhone-style rubber-band overscroll on every list.
+    val iosOverscroll = rememberIosOverscrollFactory()
+    CompositionLocalProvider(
+        LocalOverscrollFactory provides iosOverscroll,
+        LocalIsPlaying provides state.isPlaying,
+        LocalAppBackdrop provides if (record) appBackdrop else null,
+        LocalLiquidGlassEnabled provides liquid,
+    ) {
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val screenH = with(LocalDensity.current) { maxHeight.toPx() }
+        val drag = Modifier.draggable(
+            rememberDraggableState { d -> scope.launch { sheet.snapTo((sheet.value + d / screenH).coerceIn(0f, 1f)) } },
+            Orientation.Vertical,
+            onDragStopped = { v ->
+                val speed = v / screenH
+                // A quick flick decides by direction; otherwise moving a fifth of the way is enough.
+                val open = when {
+                    kotlin.math.abs(speed) > 1.2f -> speed < 0
+                    playerOpen -> sheet.value < 0.2f
+                    else -> sheet.value < 0.8f
+                }
+                settle(open, velocity = speed)
+            },
+        )
+
+        // ---- pages: slide in when opened, slide back when closed, fade between tabs ----
+        AnimatedContent(
+            targetState = page,
+            modifier = Modifier.fillMaxSize()
+                .then(if (record) Modifier.layerBackdrop(appBackdrop) else Modifier)
+                .statusBarsPadding().nestedScroll(scrollWatch),
+            transitionSpec = {
+                when {
+                    !motion -> EnterTransition.None togetherWith ExitTransition.None
+                    targetState.depth > initialState.depth ->
+                        (slideInHorizontally(tween(320)) { it / 3 } + fadeIn(tween(220))) togetherWith
+                            (slideOutHorizontally(tween(320)) { -it / 8 } + fadeOut(tween(200)))
+                    targetState.depth < initialState.depth ->
+                        (slideInHorizontally(tween(320)) { -it / 8 } + fadeIn(tween(220))) togetherWith
+                            (slideOutHorizontally(tween(320)) { it / 3 } + fadeOut(tween(200)))
+                    else -> fadeIn(tween(220)) togetherWith fadeOut(tween(140))
+                }
+            },
+            label = "pages",
+        ) { p ->
+            when (val top = p.screen) {
+                null -> when (p.tab) {
                     0 -> HomeScreen(library, actions, bottomPad)
-                    1 -> LibraryScreen(library, currentId, actions, bottomPad)
+                    1 -> LibraryScreen(library, currentId, actions, bottomPad) {
+                        LibraryReplayEntry(
+                            cards = replayCards,
+                            loading = replay.loading,
+                            holder = replayHolderName,
+                            memberSince = replay.memberSince,
+                            onOpenReplay = { stack += Screen.Replay(it) },
+                        )
+                    }
                     else -> SearchScreen(library, currentId, actions, bottomPad)
                 }
                 Screen.Settings -> SettingsScreen(library.songs.size, vm::loadLibrary, bottomPad, back)
                 Screen.Favorites -> {
                     val songs = remember(favIds, library) { library.songs.filter { it.id in favIds } }
-                    CollectionScreen("Favorites", "Songs you starred", { SymbolCover(BitChordIcons.StarFilled, it) },
+                    CollectionScreen("Favorites", "Songs you starred", { m, c -> SymbolCover(BitChordIcons.StarFilled, m, c) },
                         songs, currentId, actions, bottomPad, emptyText = "Tap the star on the player, or \"Add to favorites\" in a song's menu.")
                 }
                 Screen.Recent -> {
@@ -158,13 +364,35 @@ private fun Main(vm: PlayerViewModel) {
                         val byId = library.songs.associateBy { it.id }
                         stats.entries.sortedByDescending { it.value.lastPlayed }.mapNotNull { byId[it.key] }
                     }
-                    CollectionScreen("Recently Played", "Your listening history", { SymbolCover(BitChordIcons.Clock, it) },
+                    CollectionScreen("Recently Played", "Your listening history", { m, c -> SymbolCover(BitChordIcons.Clock, m, c) },
                         songs, currentId, actions, bottomPad, emptyText = "Songs you play show up here.")
                 }
                 is Screen.AlbumScreen -> library.albums.find { it.id == top.id }
                     ?.let { AlbumPage(it, currentId, actions, bottomPad) } ?: LaunchedEffect(top) { back() }
                 is Screen.ArtistScreen -> library.artists.find { it.name == top.name }
                     ?.let { ArtistPage(it, currentId, actions, bottomPad) } ?: LaunchedEffect(top) { back() }
+                is Screen.PlaylistScreen -> {
+                    val all by com.ghostmikz.ghostly.data.Playlists.playlists.collectAsState()
+                    all.firstOrNull { it.id == top.id }?.let { PlaylistPage(it, library, currentId, actions, bottomPad) }
+                        ?: LaunchedEffect(top) { back() }
+                }
+                is Screen.Replay -> ReplayScreen(
+                    state = replay,
+                    holder = replayHolderName,
+                    onPeriodChange = setReplayPeriod,
+                    onOpenStory = { replayStory = it },
+                    onPlaySong = { i ->
+                        val byId = library.songs.associateBy { it.id }
+                        val chart = replay.summary?.songs.orEmpty().mapNotNull { byId[it.song.id] }
+                        val start = replay.summary?.songs?.getOrNull(i)?.song?.id
+                        actions.play(chart, chart.indexOfFirst { it.id == start }.coerceAtLeast(0), false, "Replay")
+                    },
+                    onOpenArtist = { name -> if (library.artists.any { it.name == name }) stack += Screen.ArtistScreen(name) },
+                    onOpenAlbum = { id -> id?.toLongOrNull()?.takeIf { a -> library.albums.any { it.id == a } }?.let { stack += Screen.AlbumScreen(it) } },
+                    onShare = { replayShare = null; showReplayShare = true },
+                    contentPadding = PaddingValues(top = 68.dp, bottom = bottomPad),
+                    landingPage = top.landing,
+                )
                 is Screen.FolderScreen -> {
                     val songs = remember(library, top.path) { library.songs.filter { it.folder == top.path } }
                     FolderPage(top.path, songs, currentId, actions, bottomPad)
@@ -172,32 +400,136 @@ private fun Main(vm: PlayerViewModel) {
             }
         }
 
+        // Round buttons pinned at the top while the page scrolls under them (BitChord).
+        // Back goes through the system back stack, so it also leaves Settings sub-pages one at a time.
+        val backDispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
+        Row(Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 14.dp, vertical = 8.dp)) {
+            if (stack.isNotEmpty()) TopCircle(Icons.Rounded.ChevronLeft, "Back") { backDispatcher?.onBackPressed() }
+            Spacer(Modifier.weight(1f))
+            if (stack.lastOrNull() != Screen.Settings) TopCircle(Icons.Rounded.Settings, "Settings") { stack += Screen.Settings }
+        }
+
         // Fade the content out under the floating bars.
         Box(
             Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(bottomPad)
-                .background(androidx.compose.ui.graphics.Brush.verticalGradient(listOf(Color.Transparent, Color(0xCC000000)))),
+                .background(Brush.verticalGradient(listOf(Color.Transparent, GhostlyColors.Background.copy(alpha = 0.8f)))),
         )
 
-        Column(Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 8.dp)) {
-            MiniPlayer(state, vm, onOpen = { playerOpen = true })
-            if (state.current != null) Spacer(Modifier.height(10.dp))
-            FloatingTabBar(
-                listOf(
-                    TabItem("Home", BitChordIcons.Home),
-                    TabItem("Library", BitChordIcons.TabLibrary),
-                    TabItem("Search", BitChordIcons.TabSearch),
-                ),
-                selected = tab,
-                onSelect = { i -> stack.clear(); tab = i },
-            )
+        // ---- floating bars: the full tab bar with the mini player above it, or (while scrolling down)
+        // a small tab bubble with the mini player beside it. The two layouts morph into each other. ----
+        if (!liquid) {
+            // BitChord's default: the mini player stacked over the frosted tab bar.
+            Column(
+                Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 6.dp)
+                    .graphicsLayer { alpha = sheet.value },
+            ) {
+                MiniPlayer(state, vm, onOpen = { settle(true) }, modifier = Modifier.padding(horizontal = 19.dp),
+                    sidePadding = 0.dp, dragModifier = drag,
+                    onArtPlaced = { miniArtCoords = it }, hideArt = { sheet.value < 1f })
+                if (state.current != null) Spacer(Modifier.height(8.dp))
+                FloatingTabBar(TABS, selected = tab, onSelect = { i -> stack.clear(); tab = i },
+                    modifier = Modifier.padding(horizontal = 19.dp))
+            }
+        } else {
+            SharedTransitionLayout(
+                Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 8.dp)
+                    .graphicsLayer { alpha = sheet.value },
+            ) {
+                AnimatedContent(
+                    targetState = showCollapsed,
+                    transitionSpec = {
+                        if (motion) (fadeIn(tween(220)) togetherWith fadeOut(tween(160))).using(SizeTransform(clip = false))
+                        else EnterTransition.None togetherWith ExitTransition.None
+                    },
+                    label = "bars",
+                ) { small ->
+                    val mini = Modifier.sharedBounds(rememberSharedContentState("mini"), this@AnimatedContent)
+                    val bar = Modifier.sharedBounds(rememberSharedContentState("bar"), this@AnimatedContent)
+                    if (!small) {
+                        Column(Modifier.fillMaxWidth()) {
+                            MiniPlayer(state, vm, onOpen = { settle(true) }, modifier = Modifier.padding(horizontal = 18.dp).then(mini),
+                                sidePadding = 0.dp, dragModifier = drag,
+                    onArtPlaced = { miniArtCoords = it }, hideArt = { sheet.value < 1f })
+                            if (state.current != null) Spacer(Modifier.height(10.dp))
+                            GlassTabBar(TABS, selected = tab, onSelect = { i -> stack.clear(); tab = i },
+                                modifier = Modifier.padding(horizontal = 18.dp).then(bar))
+                        }
+                    } else {
+                        Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp), verticalAlignment = Alignment.CenterVertically) {
+                            TabBubble(TABS[tab], onClick = { collapsed = false }, modifier = bar)
+                            Spacer(Modifier.width(10.dp))
+                            MiniPlayer(state, vm, onOpen = { settle(true) }, modifier = Modifier.weight(1f).then(mini),
+                                sidePadding = 0.dp, dragModifier = drag,
+                    onArtPlaced = { miniArtCoords = it }, hideArt = { sheet.value < 1f })
+                        }
+                    }
+                }
+            }
         }
 
-        AnimatedVisibility(
-            visible = playerOpen,
-            enter = slideInVertically(tween(320)) { it },
-            exit = slideOutVertically(tween(260)) { it },
-        ) {
-            NowPlayingScreen(state, vm, actions, onClose = { playerOpen = false })
+        if (pickerOpen) {
+            PlaylistPickerSheet(song = pickerFor.takeUnless { it === NEW_PLAYLIST }, library = library) { pickerOpen = false }
+        }
+
+        // ---- the player, sliding up from the bottom and following the finger ----
+        if (sheet.value < 1f) {
+            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = (1f - sheet.value) * 0.5f)))
+            Box(Modifier.fillMaxSize().offset { IntOffset(0, (sheet.value * screenH).roundToInt()) }) {
+                GhostlyTheme(dark = true) {
+                    NowPlayingScreen(
+                        state, vm, actions, onClose = { settle(false) }, dragModifier = drag,
+                        openFraction = { 1f - sheet.value },
+                        miniArt = { if (motion) miniArtCoords?.takeIf { it.isAttached }?.boundsInRoot() else null },
+                        sheetOffsetPx = { sheet.value * screenH },
+                        travelPx = { screenH },
+                    )
+                }
+            }
+        }
+
+        // ---- Replay stories, over everything (BitChord mounts them outside the pane) ----
+        replayStory?.let { start ->
+            replay.summary?.takeUnless { it.isEmpty }?.let { summary ->
+                ReplayStories(
+                    summary = summary,
+                    start = start,
+                    onClose = { replayStory = null },
+                    onShare = { card -> replayShare = card; showReplayShare = true },
+                    paused = showReplayShare,
+                )
+            }
+        }
+
+        // ---- Share the Replay ----
+        if (showReplayShare) {
+            replay.summary?.takeUnless { it.isEmpty }?.let { summary ->
+                androidx.compose.material3.ModalBottomSheet(
+                    onDismissRequest = { showReplayShare = false },
+                    sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true),
+                    containerColor = androidx.compose.material3.MaterialTheme.colorScheme.background,
+                ) {
+                    ReplayShareSheet(
+                        summary = summary,
+                        holder = replayHolderName,
+                        memberSince = replay.memberSince,
+                        page = replayShare,
+                        onDismiss = { showReplayShare = false },
+                    )
+                }
+            }
         }
     }
+    }
+}
+
+/** A pinned round top button: real glass with Liquid Glass on, frosted otherwise. */
+@Composable
+private fun TopCircle(icon: androidx.compose.ui.graphics.vector.ImageVector, description: String, onClick: () -> Unit) {
+    val glass = LocalLiquidGlassEnabled.current
+    Box(
+        Modifier.size(52.dp).bounceClick(scaleDown = 0.9f, onClick = onClick).clip(CircleShape)
+            .then(if (glass) Modifier.liquidGlass(CircleShape) else Modifier.frosted(CircleShape, GhostlyColors.Surface))
+            .border(1.dp, GhostlyColors.Card, CircleShape),
+        contentAlignment = Alignment.Center,
+    ) { Icon(icon, description, tint = if (glass) glassContentColor() else GhostlyColors.Text, modifier = Modifier.size(26.dp)) }
 }

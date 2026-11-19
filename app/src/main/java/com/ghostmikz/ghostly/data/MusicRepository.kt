@@ -19,6 +19,7 @@ data class Song(
     val year: Int,
     val dateAdded: Long,
     val folder: String,
+    val isWav: Boolean = false,
 ) {
     val uri: Uri get() = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id)
     val albumArtUri: Uri get() = ContentUris.withAppendedId(ALBUM_ART, albumId)
@@ -42,8 +43,16 @@ data class Library(
 object MusicRepository {
     private const val UNKNOWN = "<unknown>"
 
-    suspend fun load(context: Context): Library = withContext(Dispatchers.IO) {
-        val songs = querySongs(context)
+    /** Folder names that hold sounds rather than music (used by "Filter non-music audio"). */
+    private val NON_MUSIC_FOLDERS = listOf("recordings", "recorder", "call", "voice", "notifications", "ringtones", "alarms", "audiobooks", "podcasts")
+
+    suspend fun load(context: Context, filterNonMusic: Boolean = true): Library = withContext(Dispatchers.IO) {
+        val songs = querySongs(context, onlyMusic = filterNonMusic).filter { s ->
+            !filterNonMusic || (
+                s.durationMs >= 30_000 && !s.isWav &&
+                    s.folder.lowercase().split('/').none { part -> NON_MUSIC_FOLDERS.any { part.startsWith(it) } }
+                )
+        }
         val albums = songs.groupBy { it.albumId }.map { (id, list) ->
             val sorted = list.sortedWith(compareBy({ it.track / 1000 }, { it.track % 1000 }, { it.title.lowercase() }))
             Album(
@@ -64,7 +73,7 @@ object MusicRepository {
         Library(songs.sortedBy { it.title.lowercase() }, albums, artists)
     }
 
-    private fun querySongs(context: Context): List<Song> {
+    private fun querySongs(context: Context, onlyMusic: Boolean): List<Song> {
         val folderCol = if (Build.VERSION.SDK_INT >= 29) MediaStore.Audio.Media.RELATIVE_PATH else MediaStore.Audio.Media.DATA
         val projection = arrayOf(
             MediaStore.Audio.Media._ID,
@@ -77,8 +86,14 @@ object MusicRepository {
             MediaStore.Audio.Media.YEAR,
             MediaStore.Audio.Media.DATE_ADDED,
             folderCol,
+            MediaStore.Audio.Media.MIME_TYPE,
         )
-        val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0 AND ${MediaStore.Audio.Media.DURATION} >= 10000"
+        // With the filter off, list every audio file (recordings, notes...), like BitChord does.
+        val selection = if (onlyMusic) {
+            "${MediaStore.Audio.Media.IS_MUSIC} != 0 AND ${MediaStore.Audio.Media.DURATION} >= 10000"
+        } else {
+            "${MediaStore.Audio.Media.DURATION} > 0"
+        }
         val out = ArrayList<Song>()
         context.contentResolver.query(
             MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, projection, selection, null, null,
@@ -93,6 +108,7 @@ object MusicRepository {
             val iYear = c.getColumnIndexOrThrow(MediaStore.Audio.Media.YEAR)
             val iAdded = c.getColumnIndexOrThrow(MediaStore.Audio.Media.DATE_ADDED)
             val iFolder = c.getColumnIndexOrThrow(folderCol)
+            val iMime = c.getColumnIndexOrThrow(MediaStore.Audio.Media.MIME_TYPE)
             while (c.moveToNext()) {
                 var folder = c.getString(iFolder).orEmpty()
                 if (Build.VERSION.SDK_INT < 29) folder = folder.substringBeforeLast('/', "")
@@ -107,6 +123,7 @@ object MusicRepository {
                     year = c.getInt(iYear),
                     dateAdded = c.getLong(iAdded),
                     folder = folder.trimEnd('/'),
+                    isWav = c.getString(iMime).orEmpty().contains("wav"),
                 )
             }
         }

@@ -29,6 +29,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.VolumeDown
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.MoreHoriz
+import androidx.compose.runtime.produceState
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.ChevronLeft
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Bedtime
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -47,6 +52,17 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import kotlin.math.roundToInt
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.geometry.lerp
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -56,6 +72,11 @@ import androidx.compose.ui.unit.sp
 import androidx.media3.common.Player
 import com.ghostmikz.ghostly.R
 import com.ghostmikz.ghostly.data.History
+import com.ghostmikz.ghostly.data.Prefs
+import android.app.Activity
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import com.ghostmikz.ghostly.ui.icons.BitChordIcons
 import kotlinx.coroutines.delay
 
@@ -63,46 +84,118 @@ private val Dim = Color.White.copy(alpha = 0.55f)
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
-fun NowPlayingScreen(state: PlayerState, vm: PlayerViewModel, actions: LibraryActions, onClose: () -> Unit) {
+fun NowPlayingScreen(
+    state: PlayerState, vm: PlayerViewModel, actions: LibraryActions, onClose: () -> Unit,
+    dragModifier: Modifier = Modifier,
+    /** 1 fully open, 0 down on the mini player (BitChord's PlayerDock.openFraction). */
+    openFraction: () -> Float = { 1f },
+    /** The mini player's cover in root coordinates, for the cover to fly to; null = plain slide. */
+    miniArt: () -> androidx.compose.ui.geometry.Rect? = { null },
+    /** How far below fully open the player sits right now, in pixels. */
+    sheetOffsetPx: () -> Float = { 0f },
+    /** How far the sheet travels from fully open to closed, in pixels. */
+    travelPx: () -> Float = { 1f },
+) {
     val song = state.current
-    val art = rememberArt(song, 1000)
-    val colors = remember(art) { art?.artColors() }
-    val top by animateColorAsState(colors?.top ?: GhostlyColors.Player, tween(600), label = "top")
-    val bottom by animateColorAsState(colors?.bottom ?: GhostlyColors.Player, tween(600), label = "bottom")
+    var coverCoords by remember { mutableStateOf<androidx.compose.ui.layout.LayoutCoordinates?>(null) }
+    // Everything but the cover fades with how open the player is; the cover flies instead.
+    val fadeRest = Modifier.graphicsLayer { alpha = if (miniArt() != null) openFraction() else 1f }
+    // The sharp cover, with the mini player's small one standing in until it has loaded,
+    // so the cover in flight is never the empty placeholder.
+    val art = rememberArt(song, 1000) ?: rememberArt(song, 192)
+    val reduceAnim by Prefs.reduceAnimation.state.collectAsState()
+    val reduceBlur by Prefs.reduceBlur.state.collectAsState()
+    val noBlend by Prefs.noBlend.state.collectAsState()
+    val fullCover by Prefs.fullCover.state.collectAsState()
+    val hideVolume by Prefs.hideVolume.state.collectAsState()
+    val hideStatus by Prefs.hideStatusBar.state.collectAsState()
+    val hideSongStatus by Prefs.hideSongStatus.state.collectAsState()
+    val nerdStats by Prefs.nerdStats.state.collectAsState()
+    // BitChord's backdrop: the cover's own colours as a still mesh hung from the cover's bottom edge.
+    val mesh = rememberArtworkMesh(song?.albumId, art)
+    var seamPx by remember { mutableFloatStateOf(0f) }
+    var playerCoords by remember { mutableStateOf<androidx.compose.ui.layout.LayoutCoordinates?>(null) }
+    val density = LocalDensity.current
     val favs by History.favorites.collectAsState()
     var showQueue by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
-    var drag by remember { mutableFloatStateOf(0f) }
+    var showSleep by remember { mutableStateOf(false) }
     // Apple-style: the cover sits a bit smaller while paused.
-    val coverScale by animateFloatAsState(if (state.isPlaying) 1f else 0.84f, spring(dampingRatio = 0.6f, stiffness = 300f), label = "cover")
+    val coverScale by animateFloatAsState(
+        if (state.isPlaying || reduceAnim) 1f else 0.84f, spring(dampingRatio = 0.6f, stiffness = 300f), label = "cover",
+    )
+    // "Hide status bar in player"
+    val view = LocalView.current
+    DisposableEffect(hideStatus) {
+        val window = (view.context as? Activity)?.window
+        val controller = window?.let { WindowCompat.getInsetsController(it, view) }
+        if (hideStatus) controller?.hide(WindowInsetsCompat.Type.statusBars())
+        onDispose { controller?.show(WindowInsetsCompat.Type.statusBars()) }
+    }
 
     Box(
-        Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(top, bottom)))
-            .pointerInput(Unit) {
-                detectVerticalDragGestures(onDragStart = { drag = 0f }, onDragEnd = { if (drag > 220) onClose() }) { _, d -> drag += d }
-            },
+        // Dragging down anywhere moves the whole player with the finger (handled by the caller).
+        Modifier.fillMaxSize()
+            .drawBehind { drawRect(GhostlyColors.Player, alpha = if (miniArt() != null) openFraction() else 1f) }
+            .onGloballyPositioned { playerCoords = it }.then(dragModifier),
     ) {
-        if (art != null && Build.VERSION.SDK_INT >= 31) {
-            Image(art.asImageBitmap(), null, Modifier.fillMaxSize().blur(90.dp), contentScale = ContentScale.Crop, alpha = 0.5f)
-            Box(Modifier.fillMaxSize().background(Color(0x66000000)))
-        }
+        // "Disable blend effects" leaves the plain dark player.
+        if (!noBlend) Box(fadeRest) { ArtworkMeshBackdrop(mesh, seam = { with(density) { seamPx.toDp() } }) }
 
-        Column(Modifier.fillMaxSize().systemBarsPadding().padding(horizontal = 28.dp)) {
+        Column(Modifier.fillMaxSize().systemBarsPadding()) {
             // handle + where it is playing from
-            Column(Modifier.fillMaxWidth().clickable(remember { MutableInteractionSource() }, null, onClick = onClose),
+            Column(fadeRest.fillMaxWidth().padding(horizontal = 28.dp).clickable(remember { MutableInteractionSource() }, null, onClick = onClose),
                 horizontalAlignment = Alignment.CenterHorizontally) {
                 Spacer(Modifier.height(10.dp))
                 Box(Modifier.width(38.dp).height(5.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.35f)))
                 Spacer(Modifier.height(10.dp))
-                Text(if (state.from.isNotEmpty()) "Playing from ${state.from}" else "Now Playing",
-                    color = Color.White.copy(alpha = 0.85f), fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+                if (!hideSongStatus) {
+                    Text(if (state.from.isNotEmpty()) "Playing from ${state.from}" else "Now Playing",
+                        color = Color.White.copy(alpha = 0.85f), fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+                }
             }
 
             Spacer(Modifier.weight(0.5f))
+            // "Full-screen cover art" runs the cover edge to edge with square corners.
+            val restCorner = if (fullCover) 0.dp else 10.dp
+            val coverShape = remember(restCorner) {
+                object : androidx.compose.ui.graphics.Shape {
+                    override fun createOutline(size: androidx.compose.ui.geometry.Size, layoutDirection: androidx.compose.ui.unit.LayoutDirection, density: androidx.compose.ui.unit.Density) =
+                        RoundedCornerShape(androidx.compose.ui.unit.lerp(8.dp, restCorner, if (miniArt() != null) openFraction() else 1f))
+                            .createOutline(size, layoutDirection, density)
+                }
+            }
             Box(
-                Modifier.fillMaxWidth().aspectRatio(1f).scale(coverScale)
-                    .shadow(if (state.isPlaying) 30.dp else 10.dp, RoundedCornerShape(10.dp))
-                    .clip(RoundedCornerShape(10.dp)).background(Color(0xFF0C0C0C)),
+                Modifier.then(if (fullCover) Modifier else Modifier.padding(horizontal = 28.dp))
+                    .fillMaxWidth().aspectRatio(1f)
+                    .onGloballyPositioned { coverCoords = it }
+                    // BitChord's dock: the cover is *laid out* (not scaled) between the mini player's
+                    // cover and this spot, so its corners morph cleanly. It rides only part of the
+                    // sheet's travel, so it lands on the mini cover with its speed run down to nothing.
+                    .layout { measurable, constraints ->
+                        val w = constraints.maxWidth
+                        val h = constraints.maxHeight
+                        val mini = miniArt()
+                        val here = coverCoords?.takeIf { it.isAttached }?.positionInRoot()
+                        val t = openFraction()
+                        if (mini == null || here == null || t >= 1f || w <= 0) {
+                            val pl = measurable.measure(constraints)
+                            return@layout layout(w, h) { pl.place(0, 0) }
+                        }
+                        val offset = sheetOffsetPx()
+                        val travel = travelPx().coerceAtLeast(1f)
+                        val sleeveOpen = Rect(here.x, here.y - offset, here.x + w, here.y - offset + h)
+                        val ride = ((mini.top - sleeveOpen.top) / travel).coerceIn(0f, 1f)
+                        val target = lerp(mini, sleeveOpen.translate(0f, offset * ride), t)
+                        val pl = measurable.measure(
+                            Constraints.fixed(target.width.roundToInt().coerceAtLeast(1), target.height.roundToInt().coerceAtLeast(1)),
+                        )
+                        layout(w, h) { pl.place((target.left - here.x).roundToInt(), (target.top - here.y).roundToInt()) }
+                    }
+                    .scale(coverScale)
+                    .shadow(if (state.isPlaying && !fullCover) 30.dp else 0.dp, coverShape)
+                    .clip(coverShape).background(Color(0xFF0C0C0C))
+                    .onGloballyPositioned { c -> playerCoords?.let { seamPx = it.localBoundingBoxOf(c).bottom } },
                 contentAlignment = Alignment.Center,
             ) {
                 if (art != null) Image(art.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
@@ -110,6 +203,7 @@ fun NowPlayingScreen(state: PlayerState, vm: PlayerViewModel, actions: LibraryAc
             }
             Spacer(Modifier.weight(0.5f))
 
+            Column(fadeRest.padding(horizontal = 28.dp)) {
             // title, artist, star, more
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
@@ -128,6 +222,14 @@ fun NowPlayingScreen(state: PlayerState, vm: PlayerViewModel, actions: LibraryAc
                     RoundGlassButton(Icons.Rounded.MoreHoriz, "More") { showMenu = true }
                     DropdownMenu(showMenu, { showMenu = false }, containerColor = GhostlyColors.Card, shape = RoundedCornerShape(14.dp)) {
                         if (song != null) SongMenuItems(song, actions.copyClosing(onClose)) { showMenu = false }
+                        // The player's own (BitChord): about what is playing now.
+                        val status = sleepTimerStatus()
+                        DropdownMenuItem(
+                            text = { Text("Sleep timer", color = GhostlyColors.Text) },
+                            leadingIcon = { Icon(Icons.Rounded.Bedtime, null, tint = GhostlyColors.Text, modifier = Modifier.size(20.dp)) },
+                            trailingIcon = status?.let { { Text(it, color = GhostlyColors.TextSecondary, fontSize = 14.sp) } },
+                            onClick = { showMenu = false; showSleep = true },
+                        )
                     }
                 }
             }
@@ -145,7 +247,7 @@ fun NowPlayingScreen(state: PlayerState, vm: PlayerViewModel, actions: LibraryAc
             }
 
             Spacer(Modifier.height(18.dp))
-            SeekBar(state, vm)
+            SeekBar(state, vm, if (nerdStats) song else null)
 
             // transport
             Row(
@@ -157,7 +259,7 @@ fun NowPlayingScreen(state: PlayerState, vm: PlayerViewModel, actions: LibraryAc
                 Transport(R.drawable.ic_player_next, "Next", 54.dp) { vm.next() }
             }
 
-            VolumeBar()
+            if (!hideVolume) VolumeBar()
 
             // bottom row: shuffle, repeat, queue
             Row(
@@ -175,23 +277,24 @@ fun NowPlayingScreen(state: PlayerState, vm: PlayerViewModel, actions: LibraryAc
                 }
                 BottomIcon(BitChordIcons.Queue, "Queue", false) { showQueue = true }
             }
+            }
         }
     }
 
     if (showQueue) QueueSheet(state, vm) { showQueue = false }
+    if (showSleep) SleepTimerSheet { showSleep = false }
 }
 
 /** Same actions, but anything that leaves the player first closes it. */
-private fun LibraryActions.copyClosing(close: () -> Unit) = LibraryActions(
-    play = play, playNext = playNext,
+private fun LibraryActions.copyClosing(close: () -> Unit) = copy(
     openAlbum = { close(); openAlbum(it) }, openArtist = { close(); openArtist(it) }, openFolder = { close(); openFolder(it) },
-    openFavorites = openFavorites, openRecent = openRecent, openSettings = openSettings, back = back,
+    removeFromPlaylist = null,
 )
 
 @Composable
 private fun RoundGlassButton(icon: ImageVector, description: String, onClick: () -> Unit) {
     Box(
-        Modifier.size(46.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.12f)).clickable(onClick = onClick),
+        Modifier.size(46.dp).bounceClick(scaleDown = 0.88f, onClick = onClick).clip(CircleShape).background(Color.White.copy(alpha = 0.12f)),
         contentAlignment = Alignment.Center,
     ) { Icon(icon, description, tint = Color.White, modifier = Modifier.size(22.dp)) }
 }
@@ -199,11 +302,13 @@ private fun RoundGlassButton(icon: ImageVector, description: String, onClick: ()
 @Composable
 private fun Transport(icon: Int, description: String, size: Dp, onClick: () -> Unit) {
     var pressed by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(if (pressed) 0.82f else 1f, label = "press")
+    val motion = motionOn()
+    val tick = rememberTick()
+    val scale by animateFloatAsState(if (pressed && motion) 0.82f else 1f, spring(dampingRatio = 0.5f, stiffness = 600f), label = "press")
     Icon(
         painterResource(icon), description, tint = Color.White,
         modifier = Modifier.size(size).scale(scale).pointerInput(onClick) {
-            detectTapGestures(onPress = { pressed = true; tryAwaitRelease(); pressed = false }, onTap = { onClick() })
+            detectTapGestures(onPress = { pressed = true; tryAwaitRelease(); pressed = false }, onTap = { tick(); onClick() })
         },
     )
 }
@@ -254,7 +359,7 @@ private fun ThinBar(value: Float, onChange: (Float) -> Unit, onDone: () -> Unit,
 }
 
 @Composable
-private fun SeekBar(state: PlayerState, vm: PlayerViewModel) {
+private fun SeekBar(state: PlayerState, vm: PlayerViewModel, statsFor: com.ghostmikz.ghostly.data.Song?) {
     var dragging by remember { mutableStateOf<Float?>(null) }
     val duration = state.durationMs.coerceAtLeast(1)
     val value = dragging ?: (state.positionMs.toFloat() / duration)
@@ -263,6 +368,10 @@ private fun SeekBar(state: PlayerState, vm: PlayerViewModel) {
         val pos = (value * duration).toLong()
         Text(formatTime(pos), color = Dim, fontSize = 13.sp, fontWeight = FontWeight.Medium)
         Spacer(Modifier.weight(1f))
+        if (statsFor != null) {
+            Text(rememberStats(statsFor), color = Dim, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+            Spacer(Modifier.weight(1f))
+        }
         Text("-" + formatTime((state.durationMs - pos).coerceAtLeast(0)), color = Dim, fontSize = 13.sp, fontWeight = FontWeight.Medium)
     }
 }
@@ -303,12 +412,17 @@ private fun QueueSheet(state: PlayerState, vm: PlayerViewModel, onDismiss: () ->
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = GhostlyColors.Card, contentColor = Color.White) {
         Text("Playing Next", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
-        val list = rememberLazyListState(initialFirstVisibleItemIndex = state.queueIndex.coerceAtLeast(0))
+        val list = rememberLazyListState(
+            initialFirstVisibleItemIndex = if (Prefs.queueHistory.value) state.queueIndex.coerceAtLeast(0) else 0,
+        )
+        val showHistory by Prefs.queueHistory.state.collectAsState()
+        val first = if (showHistory) 0 else state.queueIndex.coerceAtLeast(0)
         LazyColumn(state = list, modifier = Modifier.fillMaxHeight(0.75f)) {
-            itemsIndexed(state.queue) { i, s ->
+            itemsIndexed(state.queue.drop(first), key = { j, s -> "${s.id}-${j + first}" }) { j, s ->
+                val i = j + first
                 val now = i == state.queueIndex
                 Row(
-                    Modifier.fillMaxWidth().clickable { vm.playQueueItem(i) }.padding(horizontal = 20.dp, vertical = 8.dp),
+                    Modifier.animateItem().fillMaxWidth().clickable { vm.playQueueItem(i) }.padding(horizontal = 20.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     AlbumArt(s, Modifier.size(48.dp), corner = 6.dp)
@@ -321,5 +435,132 @@ private fun QueueSheet(state: PlayerState, vm: PlayerViewModel, onDismiss: () ->
                 }
             }
         }
+    }
+}
+
+/** "Stats for nerds": format, bitrate and sample rate, read from the file itself. */
+@Composable
+private fun rememberStats(song: com.ghostmikz.ghostly.data.Song): String {
+    val context = LocalContext.current
+    var text by remember(song.id) { mutableStateOf("") }
+    LaunchedEffect(song.id) {
+        text = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching {
+                val r = android.media.MediaMetadataRetriever()
+                try {
+                    r.setDataSource(context, song.uri)
+                    val mime = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_MIMETYPE).orEmpty()
+                    val kbps = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_BITRATE)?.toIntOrNull()?.div(1000)
+                    val hz = if (Build.VERSION.SDK_INT >= 31) {
+                        r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_SAMPLERATE)?.toIntOrNull()
+                    } else null
+                    val format = when {
+                        "mpeg" in mime -> "MP3"; "flac" in mime -> "FLAC"; "mp4" in mime || "aac" in mime -> "AAC"
+                        "ogg" in mime || "vorbis" in mime -> "OGG"; "opus" in mime -> "OPUS"; "wav" in mime -> "WAV"
+                        else -> mime.substringAfter('/').uppercase()
+                    }
+                    listOfNotNull(format, kbps?.let { "$it kbps" }, hz?.let { "%.1f kHz".format(it / 1000f) }).joinToString(" · ")
+                } finally { r.release() }
+            }.getOrDefault("")
+        }
+    }
+    return text
+}
+
+// ---------- Sleep timer (BitChord's SleepTimerPicker, https://github.com/kushagrasinghx/BitChord, GPLv3) ----------
+
+/** Live "m:ss" until the sleep timer fires, or null when none is running. */
+@Composable
+fun sleepTimerCountdown(): String? {
+    val deadline by com.ghostmikz.ghostly.playback.SleepTimer.deadline.collectAsState()
+    val remaining by produceState<Long?>(com.ghostmikz.ghostly.playback.SleepTimer.remainingMs(), deadline) {
+        while (deadline != null) {
+            value = com.ghostmikz.ghostly.playback.SleepTimer.remainingMs()
+            delay(1_000)
+        }
+        value = null
+    }
+    return remaining?.let { val s = it / 1000; "%d:%02d".format(java.util.Locale.ROOT, s / 60, s % 60) }
+}
+
+/** What the menu row shows next to "Sleep timer". */
+@Composable
+fun sleepTimerStatus(): String? {
+    val afterTrack by com.ghostmikz.ghostly.playback.SleepTimer.afterTrack.collectAsState()
+    return sleepTimerCountdown() ?: "After this song".takeIf { afterTrack }
+}
+
+private fun sleepDuration(minutes: Int): String =
+    if (minutes >= 60) "${minutes / 60} h ${minutes % 60} min" else "$minutes min"
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SleepTimerSheet(onDismiss: () -> Unit) {
+    val timer = com.ghostmikz.ghostly.playback.SleepTimer
+    val chosen by timer.minutes.collectAsState()
+    val afterTrack by timer.afterTrack.collectAsState()
+    val countdown = sleepTimerCountdown()
+    // A running timer no preset matches is a custom one: the row ticks and names it.
+    val custom = chosen?.takeIf { it !in timer.PRESETS }
+    var pickingCustom by remember { mutableStateOf(false) }
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = GhostlyColors.Card, contentColor = Color.White) {
+        if (pickingCustom) {
+            var minutes by remember { mutableIntStateOf(custom ?: 90) }
+            SleepHeader("Custom", "Pause playback after a while") { pickingCustom = false }
+            HorizontalDivider(thickness = 0.5.dp, color = GhostlyColors.CardHigh)
+            Text(sleepDuration(minutes), color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.SemiBold,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 8.dp))
+            Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = { minutes -= timer.STEP_MINUTES }, enabled = minutes > timer.STEP_MINUTES) { Text("−", color = Color.White, fontSize = 24.sp) }
+                ThinBar(timer.fractionOf(minutes), { minutes = timer.minutesAt(it) }, {}, Modifier.weight(1f))
+                TextButton(onClick = { minutes += timer.STEP_MINUTES }, enabled = minutes < timer.MAX_MINUTES) { Text("+", color = Color.White, fontSize = 24.sp) }
+            }
+            Box(Modifier.fillMaxWidth().padding(20.dp).height(50.dp).clip(CircleShape).background(Color.White)
+                .bounceClick { timer.start(minutes); onDismiss() }, Alignment.Center) {
+                Text("Start timer", color = Color.Black, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+            }
+        } else {
+            SleepHeader("Sleep timer", when {
+                countdown != null -> "$countdown until playback pauses"
+                afterTrack -> "Pausing when this song ends"
+                else -> "Pause playback after a while"
+            }, onDismiss)
+            HorizontalDivider(thickness = 0.5.dp, color = GhostlyColors.CardHigh)
+            // Finishing the song is the one people reach for at the end of a listen, so it leads.
+            SleepOption("After this song", afterTrack) { timer.startAfterTrack(); onDismiss() }
+            timer.PRESETS.forEach { m ->
+                SleepOption(if (m == 60) "1 hour" else "$m minutes", m == chosen) { timer.start(m); onDismiss() }
+            }
+            SleepOption(custom?.let { "Custom · " + sleepDuration(it) } ?: "Custom", custom != null) { pickingCustom = true }
+            if (chosen != null || afterTrack) {
+                SleepOption("Turn off timer", false, icon = Icons.Rounded.Close) { timer.cancel(); onDismiss() }
+            }
+        }
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+@Composable
+private fun SleepHeader(title: String, subtitle: String, onBack: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(start = 8.dp, end = 22.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        IconButton(onClick = onBack) { Icon(Icons.Rounded.ChevronLeft, "Back", tint = Color.White) }
+        Column(Modifier.weight(1f)) {
+            Text(title, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.3).sp)
+            Text(subtitle, color = Color.White.copy(alpha = 0.6f), fontSize = 14.sp)
+        }
+    }
+}
+
+/** A choice row; the tick leads, in the icon column, as a menu marks its choice. */
+@Composable
+private fun SleepOption(label: String, selected: Boolean, icon: ImageVector? = null, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 22.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.width(32.dp)) {
+            val i = icon ?: if (selected) Icons.Rounded.Check else null
+            if (i != null) Icon(i, null, tint = Color.White, modifier = Modifier.size(20.dp))
+        }
+        Text(label, color = Color.White, fontSize = 17.sp)
     }
 }

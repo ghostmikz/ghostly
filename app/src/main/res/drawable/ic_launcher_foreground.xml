@@ -1,8 +1,24 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp" android:height="108dp"
     android:viewportWidth="108" android:viewportHeight="108">
-    <group android:translateX="30" android:translateY="30">
-        <path android:fillColor="#FFF2B8D6"
-            android:pathData="M18,0 L42,-4 L42,30 A8,8 0 1,1 36,22.3 L36,6 L24,8 L24,36 A8,8 0 1,1 18,28.3 Z" />
+    <!-- Ghost with headphones, leaning a little like it is vibing to the music. -->
+    <group android:scaleX="0.667" android:scaleY="0.667" android:pivotX="54" android:pivotY="54">
+        <group android:rotation="-8" android:pivotX="55" android:pivotY="60">
+            <group android:translateX="-1" android:translateY="-2">
+                <!-- body with a hem that flows to the right, eyes cut out -->
+                <path android:fillColor="#FFFFFFFF" android:fillType="evenOdd"
+                    android:pathData="M34,57 C34,41 43,31 55,31 C67,31 76,41 76,57 L76,71 C76,77 78.5,81.5 83,83.5 C78,88.5 71,88 67.5,81 C65.5,88 57,90.5 53,83 C50.5,90.5 39,92 35.5,84 C34.5,82 34,79 34,76 Z M45.5,56.5 a3.1,4.6 0 1,0 6.2,0 a3.1,4.6 0 1,0 -6.2,0 Z M59,56.5 a3.1,4.6 0 1,0 6.2,0 a3.1,4.6 0 1,0 -6.2,0 Z" />
+                <!-- headband: dark gap first, then the white band -->
+                <path android:strokeColor="#FF000000" android:strokeWidth="10.5" android:strokeLineCap="round"
+                    android:pathData="M27.5,64 V57 A27.5,27.5 0 0,1 82.5,57 V64" />
+                <path android:strokeColor="#FFFFFFFF" android:strokeWidth="5" android:strokeLineCap="round"
+                    android:pathData="M27.5,64 V57 A27.5,27.5 0 0,1 82.5,57 V64" />
+                <!-- ear cups -->
+                <path android:fillColor="#FFFFFFFF" android:strokeColor="#FF000000" android:strokeWidth="3.2"
+                    android:pathData="M27.5,55 a7,7 0 0,1 7,7 v8 a7,7 0 0,1 -14,0 v-8 a7,7 0 0,1 7,-7 z" />
+                <path android:fillColor="#FFFFFFFF" android:strokeColor="#FF000000" android:strokeWidth="3.2"
+                    android:pathData="M82.5,55 a7,7 0 0,1 7,7 v8 a7,7 0 0,1 -14,0 v-8 a7,7 0 0,1 7,-7 z" />
+            </group>
+        </group>
     </group>
 </vector>

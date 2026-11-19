@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  What the FileProvider may hand out (BitChord's file_paths): only the Replay
+  picture, written to cache/shared, so the app receiving it can read that one
+  file and nothing else.
+-->
+<paths>
+    <cache-path name="shared" path="shared/" />
+</paths>

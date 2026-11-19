@@ -63,7 +63,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     fun loadLibrary() {
         viewModelScope.launch {
             _loading.value = true
-            _library.value = runCatching { MusicRepository.load(getApplication()) }.getOrDefault(Library())
+            _library.value = runCatching { MusicRepository.load(getApplication(), com.ghostmikz.ghostly.data.Prefs.filterNonMusic.value) }.getOrDefault(Library())
             byId = _library.value.songs.associateBy { it.id.toString() }
             _loading.value = false
             refresh()

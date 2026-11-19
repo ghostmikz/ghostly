@@ -39,17 +39,43 @@ object History {
         save()
     }
 
-    fun toggleFavorite(songId: Long) {
-        val f = _favorites.value
-        _favorites.value = if (songId in f) f - songId else f + songId
+    /** The star is a like, and likes live in the Liked playlist (as in BitChord). */
+    fun toggleFavorite(songId: Long) { Playlists.toggleLike(songId) }
+
+    /** Set by [Playlists] whenever Liked changes. */
+    internal fun setFavorites(ids: Set<Long>) {
+        _favorites.value = ids
+        save()
+    }
+
+    fun clearHistory() {
+        _stats.value = emptyMap()
+        save()
+    }
+
+    fun clearFavorites() = Playlists.clearLiked()
+
+    /** History + favorites as JSON (for "Export data"). */
+    fun exportJson(): JSONObject {
+        val plays = JSONObject()
+        _stats.value.forEach { (id, s) -> plays.put(id.toString(), JSONObject().put("c", s.count).put("t", s.lastPlayed)) }
+        return JSONObject().put("plays", plays).put("favorites", JSONArray(_favorites.value.toList()))
+    }
+
+    fun importJson(root: JSONObject) {
+        val plays = root.optJSONObject("plays") ?: JSONObject()
+        _stats.value = plays.keys().asSequence().associate { k ->
+            val o = plays.getJSONObject(k)
+            k.toLong() to Stats(o.getInt("c"), o.getLong("t"))
+        }
+        val fav = root.optJSONArray("favorites") ?: JSONArray()
+        _favorites.value = (0 until fav.length()).map { fav.getLong(it) }.toSet()
         save()
     }
 
     @Synchronized
     private fun save() {
-        val plays = JSONObject()
-        _stats.value.forEach { (id, s) -> plays.put(id.toString(), JSONObject().put("c", s.count).put("t", s.lastPlayed)) }
-        val root = JSONObject().put("plays", plays).put("favorites", JSONArray(_favorites.value.toList()))
+        val root = exportJson()
         runCatching {
             val tmp = File(file.parentFile, "history.json.tmp")
             tmp.writeText(root.toString())

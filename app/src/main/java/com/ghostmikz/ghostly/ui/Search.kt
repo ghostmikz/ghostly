@@ -39,7 +39,7 @@ fun SearchScreen(library: Library, currentId: Long?, actions: LibraryActions, bo
 
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = bottomPad)) {
         item {
-            HeaderBar(null, actions)
+            TopBarSpace()
             BigTitle("Search")
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).height(48.dp)
@@ -52,7 +52,7 @@ fun SearchScreen(library: Library, currentId: Long?, actions: LibraryActions, bo
                     if (query.isEmpty()) Text("Artists, Songs, Albums", color = GhostlyColors.TextSecondary, fontSize = 17.sp)
                     BasicTextField(
                         query, { query = it }, singleLine = true,
-                        textStyle = TextStyle(color = Color.White, fontSize = 17.sp, fontFamily = Inter),
+                        textStyle = TextStyle(color = GhostlyColors.Text, fontSize = 17.sp, fontFamily = Inter),
                         cursorBrush = SolidColor(GhostlyColors.Accent), modifier = Modifier.fillMaxWidth(),
                     )
                 }
@@ -75,7 +75,7 @@ fun SearchScreen(library: Library, currentId: Long?, actions: LibraryActions, bo
         if (songs.isNotEmpty()) {
             item { ShelfTitle("Songs") }
             itemsIndexed(songs, key = { _, s -> "s" + s.id }) { i, s ->
-                SongRow(s, s.id == currentId, { actions.play(songs, i, false, "Search") }, { SongMenuItems(s, actions, it) })
+                SongRow(s, s.id == currentId, { actions.play(songs, i, false, "Search") }, { SongMenuItems(s, actions, it) }, onPlayNext = { actions.playNext(s) })
             }
         }
     }

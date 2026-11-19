@@ -32,11 +32,12 @@ import androidx.compose.ui.unit.sp
 import com.ghostmikz.ghostly.data.Album
 import com.ghostmikz.ghostly.data.Artist
 import com.ghostmikz.ghostly.data.Library
+import com.ghostmikz.ghostly.data.Prefs
 import com.ghostmikz.ghostly.data.Song
 import com.ghostmikz.ghostly.ui.icons.BitChordIcons
 
 /** Everything a screen can ask the app to do. */
-class LibraryActions(
+data class LibraryActions(
     val play: (songs: List<Song>, start: Int, shuffle: Boolean, from: String) -> Unit,
     val playNext: (Song) -> Unit,
     val openAlbum: (Long) -> Unit,
@@ -46,30 +47,37 @@ class LibraryActions(
     val openRecent: () -> Unit,
     val openSettings: () -> Unit,
     val back: () -> Unit,
+    val openPlaylist: (String) -> Unit = {},
+    /** Opens BitChord's "Add to playlist" sheet for a song (null = make a new playlist). */
+    val addToPlaylist: (Song?) -> Unit = {},
+    /** Set on a playlist's own page: the song menu then offers "Remove from playlist". */
+    val removeFromPlaylist: ((Song) -> Unit)? = null,
 )
 
-private val LIB_TABS = listOf("Songs", "Artists", "Albums", "Folders")
+private val LIB_TABS = listOf("Songs", "Artists", "Albums", "Playlists", "Folders")
 
-/** Top row with round buttons on the right (and a back button on the left on sub pages). */
+/** Room at the top of a page for the pinned round buttons (drawn by MainActivity, like BitChord's). */
 @Composable
-fun HeaderBar(onBack: (() -> Unit)?, actions: LibraryActions?) {
-    Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        if (onBack != null) CircleButton(Icons.Rounded.ChevronLeft, "Back", size = 52.dp, onClick = onBack)
-        Spacer(Modifier.weight(1f))
-        if (actions != null) CircleButton(Icons.Rounded.Settings, "Settings", size = 52.dp, onClick = actions.openSettings)
-    }
-}
+fun TopBarSpace() = Spacer(Modifier.height(68.dp))
 
 @Composable
-fun LibraryScreen(library: Library, currentId: Long?, actions: LibraryActions, bottomPad: Dp) {
+fun LibraryScreen(
+    library: Library,
+    currentId: Long?,
+    actions: LibraryActions,
+    bottomPad: Dp,
+    /** BitChord's way in to Replay: its row of headline cards at the head of the Library. */
+    replay: @Composable () -> Unit = {},
+) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
     val songs = library.songs
     val header: @Composable () -> Unit = {
         Column {
-            HeaderBar(null, actions)
+            TopBarSpace()
             BigTitle("Library")
             Spacer(Modifier.height(8.dp))
-            NavRow(BitChordIcons.Star, "Favorites", actions.openFavorites)
+            replay()
+            NavRow(BitChordIcons.Star, "Liked", actions.openFavorites)
             NavRow(BitChordIcons.Clock, "Recently Played", actions.openRecent)
             Spacer(Modifier.height(20.dp))
             PlayShuffleButtons(
@@ -85,7 +93,9 @@ fun LibraryScreen(library: Library, currentId: Long?, actions: LibraryActions, b
         0 -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = bottomPad)) {
             item { header() }
             itemsIndexed(songs, key = { _, s -> s.id }) { i, s ->
-                SongRow(s, s.id == currentId, { actions.play(songs, i, false, "Library") }, { SongMenuItems(s, actions, it) })
+                Box(Modifier.animateItem()) {
+                    SongRow(s, s.id == currentId, { actions.play(songs, i, false, "Library") }, { SongMenuItems(s, actions, it) }, onPlayNext = { actions.playNext(s) })
+                }
             }
         }
         1 -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = bottomPad)) {
@@ -103,6 +113,21 @@ fun LibraryScreen(library: Library, currentId: Long?, actions: LibraryActions, b
                 Box(Modifier.padding(horizontal = 8.dp)) { AlbumTile(a) { actions.openAlbum(a.id) } }
             }
         }
+        3 -> {
+            val all by com.ghostmikz.ghostly.data.Playlists.playlists.collectAsState()
+            LazyVerticalGrid(
+                GridCells.Adaptive(160.dp), Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = bottomPad),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                verticalArrangement = Arrangement.spacedBy(18.dp),
+            ) {
+                item(span = { GridItemSpan(maxLineSpan) }) { header() }
+                item(key = "new") { Box(Modifier.padding(horizontal = 8.dp)) { PlaylistTile(null, library) { actions.addToPlaylist(null) } } }
+                items(all, key = { it.id }) { p ->
+                    Box(Modifier.padding(horizontal = 8.dp)) { PlaylistTile(p, library) { actions.openPlaylist(p.id) } }
+                }
+            }
+        }
         else -> {
             val folders = remember(songs) { songs.groupingBy { it.folder }.eachCount().toSortedMap(String.CASE_INSENSITIVE_ORDER) }
             LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = bottomPad)) {
@@ -117,10 +142,10 @@ fun LibraryScreen(library: Library, currentId: Long?, actions: LibraryActions, b
 
 @Composable
 fun AlbumTile(album: Album, onClick: () -> Unit) {
-    Column(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
+    Column(Modifier.fillMaxWidth().bounceClick(scaleDown = 0.95f, onClick = onClick)) {
         AlbumArt(album.songs.first(), Modifier.fillMaxWidth().aspectRatio(1f), corner = 10.dp, px = 400)
         Spacer(Modifier.height(8.dp))
-        Text(album.title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(album.title, color = GhostlyColors.Text, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text(album.artist, color = GhostlyColors.TextSecondary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
@@ -131,11 +156,11 @@ fun ArtistRow(artist: Artist, onClick: () -> Unit) {
         AlbumArt(artist.songs.first(), Modifier.size(52.dp), corner = 26.dp)
         Column(Modifier.weight(1f).padding(start = 14.dp)) {
             Column(Modifier.padding(vertical = 12.dp)) {
-                Text(artist.name, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(artist.name, color = GhostlyColors.Text, fontSize = 17.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(countText(artist.albums.size, "album") + "  ·  " + countText(artist.songs.size, "song"),
                     color = GhostlyColors.TextSecondary, fontSize = 15.sp)
             }
-            HorizontalDivider(thickness = 0.5.dp, color = Color(0xFF242426))
+            HorizontalDivider(thickness = 0.5.dp, color = GhostlyColors.Divider)
         }
     }
 }
@@ -148,10 +173,10 @@ fun IconRow(icon: ImageVector, title: String, subtitle: String, onClick: () -> U
         }
         Column(Modifier.weight(1f).padding(start = 14.dp)) {
             Column(Modifier.padding(vertical = 12.dp)) {
-                Text(title, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(title, color = GhostlyColors.Text, fontSize = 17.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(subtitle, color = GhostlyColors.TextSecondary, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            HorizontalDivider(thickness = 0.5.dp, color = Color(0xFF242426))
+            HorizontalDivider(thickness = 0.5.dp, color = GhostlyColors.Divider)
         }
     }
 }
@@ -162,7 +187,7 @@ fun IconRow(icon: ImageVector, title: String, subtitle: String, onClick: () -> U
 fun CollectionScreen(
     title: String,
     subtitle: String,
-    cover: @Composable (Modifier) -> Unit,
+    cover: @Composable (Modifier, Dp) -> Unit,
     songs: List<Song>,
     currentId: Long?,
     actions: LibraryActions,
@@ -174,10 +199,12 @@ fun CollectionScreen(
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = bottomPad)) {
         item {
             Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-                HeaderBar(actions.back, actions)
-                cover(Modifier.fillMaxWidth(0.76f).aspectRatio(1f))
+                TopBarSpace()
+                // "Full-screen album/playlist cover" runs the cover edge to edge.
+                if (Prefs.fullAlbumCover.state.collectAsState().value) cover(Modifier.fillMaxWidth().aspectRatio(1f), 0.dp)
+                else cover(Modifier.fillMaxWidth(0.76f).aspectRatio(1f), 12.dp)
                 Spacer(Modifier.height(22.dp))
-                Text(title, color = Color.White, fontSize = 30.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.6).sp,
+                Text(title, color = GhostlyColors.Text, fontSize = 30.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.6).sp,
                     textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 24.dp))
                 if (subtitle.isNotEmpty()) {
                     Text(subtitle, color = GhostlyColors.TextSecondary, fontSize = 22.sp, textAlign = TextAlign.Center,
@@ -204,17 +231,19 @@ fun CollectionScreen(
                 modifier = Modifier.fillMaxWidth().padding(32.dp))
         }
         itemsIndexed(songs, key = { _, s -> s.id }) { i, s ->
-            SongRow(s, s.id == currentId, { actions.play(songs, i, false, title) }, { SongMenuItems(s, actions, it) },
-                trackNumber = if (numbered) s.track % 1000 else null)
+            Box(Modifier.animateItem()) {
+                SongRow(s, s.id == currentId, { actions.play(songs, i, false, title) }, { SongMenuItems(s, actions, it) },
+                    trackNumber = if (numbered) s.track % 1000 else null, onPlayNext = { actions.playNext(s) })
+            }
         }
     }
 }
 
 /** A dark rounded card with a big grey symbol, for collections without a cover (folders, favorites). */
 @Composable
-fun SymbolCover(icon: ImageVector, modifier: Modifier) {
-    Box(modifier.clip(RoundedCornerShape(12.dp)).background(Color(0xFF232325)), Alignment.Center) {
-        Icon(icon, null, tint = Color(0xFF5E5E62), modifier = Modifier.fillMaxSize(0.3f))
+fun SymbolCover(icon: ImageVector, modifier: Modifier, corner: Dp = 12.dp) {
+    Box(modifier.clip(RoundedCornerShape(corner)).background(GhostlyColors.Card), Alignment.Center) {
+        Icon(icon, null, tint = GhostlyColors.PlaceholderIcon, modifier = Modifier.fillMaxSize(0.3f))
     }
 }
 
@@ -223,7 +252,7 @@ fun AlbumPage(album: Album, currentId: Long?, actions: LibraryActions, bottomPad
     CollectionScreen(
         album.title,
         album.artist + if (album.year > 0) "  ·  ${album.year}" else "",
-        { AlbumArt(album.songs.first(), it, corner = 12.dp, px = 900) },
+        { m, c -> AlbumArt(album.songs.first(), m, corner = c, px = 900) },
         album.songs, currentId, actions, bottomPad, numbered = true,
     )
 }
@@ -232,7 +261,7 @@ fun AlbumPage(album: Album, currentId: Long?, actions: LibraryActions, bottomPad
 fun ArtistPage(artist: Artist, currentId: Long?, actions: LibraryActions, bottomPad: Dp) {
     CollectionScreen(
         artist.name, "Artist",
-        { AlbumArt(artist.songs.first(), it, corner = 400.dp, px = 900) },
+        { m, c -> AlbumArt(artist.songs.first(), m, corner = if (c > 0.dp) 400.dp else 0.dp, px = 900) },
         artist.songs, currentId, actions, bottomPad,
         extra = {
             if (artist.albums.size > 1 || artist.albums.firstOrNull()?.title != "Unknown album") {
@@ -249,7 +278,7 @@ fun ArtistPage(artist: Artist, currentId: Long?, actions: LibraryActions, bottom
 
 @Composable
 fun FolderPage(path: String, songs: List<Song>, currentId: Long?, actions: LibraryActions, bottomPad: Dp) {
-    CollectionScreen(folderName(path), path, { SymbolCover(Icons.Rounded.Folder, it) }, songs, currentId, actions, bottomPad)
+    CollectionScreen(folderName(path), path, { m, c -> SymbolCover(Icons.Rounded.Folder, m, c) }, songs, currentId, actions, bottomPad)
 }
 
 // ---------- helpers ----------

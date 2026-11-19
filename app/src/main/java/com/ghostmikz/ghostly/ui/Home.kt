@@ -1,6 +1,5 @@
 package com.ghostmikz.ghostly.ui
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -13,11 +12,14 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.Image
+import androidx.compose.runtime.produceState
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -63,7 +65,7 @@ fun HomeScreen(library: Library, actions: LibraryActions, bottomPad: Dp) {
 
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = bottomPad)) {
         item {
-            HeaderBar(null, actions)
+            TopBarSpace()
             BigTitle("Listen Now")
         }
         if (songs.isEmpty()) {
@@ -111,21 +113,20 @@ fun HomeScreen(library: Library, actions: LibraryActions, bottomPad: Dp) {
 @Composable
 private fun MixCard(mix: Mix, onClick: () -> Unit) {
     Box(
-        Modifier.width(250.dp).height(320.dp).clip(RoundedCornerShape(20.dp)).background(mix.color).clickable(onClick = onClick),
+        Modifier.width(250.dp).height(320.dp).bounceClick(scaleDown = 0.96f, onClick = onClick)
+            .clip(RoundedCornerShape(20.dp)).background(mix.color),
     ) {
-        // Three soft rings as decoration, like BitChord's mood cards.
-        Canvas(Modifier.fillMaxWidth().height(210.dp).padding(top = 30.dp)) {
-            val line = Stroke(width = 3.dp.toPx())
-            val ring = Color.White.copy(alpha = 0.6f)
-            val cx = size.width / 2
-            listOf(Triple(0.38f, 0.16f, 0f), Triple(0.58f, 0.22f, 0.24f), Triple(0.72f, 0.28f, 0.52f)).forEach { (w, h, y) ->
-                val rw = size.width * w
-                val rh = size.height * h
-                drawOval(ring, Offset(cx - rw / 2, size.height * y), Size(rw, rh), style = line)
-            }
+        // Real cover art from a song in this mix (no drawn decoration); plain color if none has art.
+        val context = LocalContext.current
+        val cover by produceState<android.graphics.Bitmap?>(null, mix.songs) {
+            value = mix.songs.take(12).firstNotNullOfOrNull { ArtCache.load(context, it, 600) }
         }
-        Icon(BitChordIcons.MusicNote, null, tint = Color.White.copy(alpha = 0.9f),
-            modifier = Modifier.align(Alignment.TopEnd).padding(14.dp).size(22.dp))
+        cover?.let {
+            Image(it.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(
+                0.35f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.75f),
+            )))
+        }
         Column(Modifier.align(Alignment.BottomStart).padding(18.dp)) {
             Text(mix.label, color = Color.White.copy(alpha = 0.85f), fontSize = 14.sp)
             Text(mix.title, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.4).sp)
