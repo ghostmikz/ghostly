@@ -1,4 +1,4 @@
-package com.ghostmikz.tune
+package com.ghostmikz.ghostly
 
 import android.Manifest
 import android.content.pm.PackageManager
@@ -34,10 +34,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.ghostmikz.tune.data.History
-import com.ghostmikz.tune.data.Prefs
-import com.ghostmikz.tune.ui.*
-import com.ghostmikz.tune.ui.icons.BitChordIcons
+import com.ghostmikz.ghostly.data.History
+import com.ghostmikz.ghostly.data.Prefs
+import com.ghostmikz.ghostly.ui.*
+import com.ghostmikz.ghostly.ui.icons.BitChordIcons
 
 private sealed interface Screen {
     data object Settings : Screen
@@ -62,7 +62,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         Prefs.init(this)
         History.init(this)
-        setContent { TuneTheme { App(vm) } }
+        setContent { GhostlyTheme { App(vm) } }
     }
 }
 
@@ -82,7 +82,7 @@ private fun App(vm: PlayerViewModel) {
     LaunchedEffect(Unit) { if (!hasPermission) ask() }
     LaunchedEffect(hasPermission) { if (hasPermission) vm.loadLibrary() }
 
-    Box(Modifier.fillMaxSize().background(TuneColors.Background)) {
+    Box(Modifier.fillMaxSize().background(GhostlyColors.Background)) {
         if (hasPermission) Main(vm) else PermissionScreen(::ask)
     }
 }
@@ -93,8 +93,8 @@ private fun PermissionScreen(onAllow: () -> Unit) {
         Text("Your music,\nright here.", color = Color.White, fontSize = 40.sp, fontWeight = FontWeight.ExtraBold,
             letterSpacing = (-1).sp, lineHeight = 44.sp)
         Spacer(Modifier.height(12.dp))
-        Text("Tune plays the audio files on this phone. Allow access to your music to get started.",
-            color = TuneColors.TextSecondary, fontSize = 17.sp)
+        Text("Ghostly plays the audio files on this phone. Allow access to your music to get started.",
+            color = GhostlyColors.TextSecondary, fontSize = 17.sp)
         Spacer(Modifier.height(32.dp))
         Box(
             Modifier.fillMaxWidth().height(54.dp).clip(CircleShape).background(Color.White).clickable(onClick = onAllow),

@@ -1,4 +1,4 @@
-package com.ghostmikz.tune.ui
+package com.ghostmikz.ghostly.ui
 
 import android.content.Context
 import android.graphics.Bitmap
@@ -33,7 +33,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.palette.graphics.Palette
-import com.ghostmikz.tune.data.Song
+import com.ghostmikz.ghostly.data.Song
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -96,7 +96,7 @@ fun AlbumArt(song: Song?, modifier: Modifier = Modifier, corner: Dp = 8.dp, px: 
         if (bmp != null) {
             Image(bmp.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
         } else {
-            Icon(com.ghostmikz.tune.ui.icons.BitChordIcons.MusicNote, null, Modifier.fillMaxWidth(0.34f).fillMaxHeight(0.34f), tint = Color(0xFF5A5A5E))
+            Icon(com.ghostmikz.ghostly.ui.icons.BitChordIcons.MusicNote, null, Modifier.fillMaxWidth(0.34f).fillMaxHeight(0.34f), tint = Color(0xFF5A5A5E))
         }
     }
 }

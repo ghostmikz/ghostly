@@ -1,5 +1,5 @@
 // From BitChord (https://github.com/kushagrasinghx/BitChord), GPLv3.
-package com.ghostmikz.tune.lastfm
+package com.ghostmikz.ghostly.lastfm
 
 /**
  * Returns the first credited artist for services that do not handle joint

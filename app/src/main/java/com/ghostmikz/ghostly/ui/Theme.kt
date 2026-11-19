@@ -1,4 +1,4 @@
-package com.ghostmikz.tune.ui
+package com.ghostmikz.ghostly.ui
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
@@ -10,12 +10,12 @@ import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
-import com.ghostmikz.tune.R
+import com.ghostmikz.ghostly.R
 
 // Colors and type scale follow BitChord's theme (GPLv3). BitChord ships Apple's SF Pro,
-// which cannot be redistributed, so Tune uses Inter (OFL), which is very close.
+// which cannot be redistributed, so Ghostly uses Inter (OFL), which is very close.
 
-object TuneColors {
+object GhostlyColors {
     val Background = Color.Black
     val Surface = Color(0xFF0D0D0F)
     val Card = Color(0xFF1C1C1E)
@@ -30,21 +30,21 @@ object TuneColors {
 private val DarkColors = darkColorScheme(
     primary = Color.White,
     onPrimary = Color.Black,
-    background = TuneColors.Background,
+    background = GhostlyColors.Background,
     onBackground = Color.White,
-    surface = TuneColors.Surface,
+    surface = GhostlyColors.Surface,
     onSurface = Color.White,
-    surfaceVariant = TuneColors.Card,
-    onSurfaceVariant = TuneColors.TextSecondary,
-    surfaceContainer = TuneColors.Card,
-    surfaceContainerHigh = TuneColors.Card,
-    surfaceContainerHighest = TuneColors.CardHigh,
-    surfaceContainerLow = TuneColors.Surface,
-    outline = TuneColors.Outline,
-    outlineVariant = TuneColors.Outline,
-    secondaryContainer = TuneColors.CardHigh,
+    surfaceVariant = GhostlyColors.Card,
+    onSurfaceVariant = GhostlyColors.TextSecondary,
+    surfaceContainer = GhostlyColors.Card,
+    surfaceContainerHigh = GhostlyColors.Card,
+    surfaceContainerHighest = GhostlyColors.CardHigh,
+    surfaceContainerLow = GhostlyColors.Surface,
+    outline = GhostlyColors.Outline,
+    outlineVariant = GhostlyColors.Outline,
+    secondaryContainer = GhostlyColors.CardHigh,
     onSecondaryContainer = Color.White,
-    error = TuneColors.Accent,
+    error = GhostlyColors.Accent,
 )
 
 val Inter = FontFamily(
@@ -58,7 +58,7 @@ val Inter = FontFamily(
 private fun style(weight: Int, size: Int, spacing: Double) =
     TextStyle(fontFamily = Inter, fontWeight = FontWeight(weight), fontSize = size.sp, letterSpacing = spacing.sp)
 
-private val TuneTypography = Typography(
+private val GhostlyTypography = Typography(
     displayLarge = style(800, 34, -0.8),
     displayMedium = style(800, 32, -0.8),
     headlineLarge = style(800, 30, -0.7),
@@ -76,6 +76,6 @@ private val TuneTypography = Typography(
 )
 
 @Composable
-fun TuneTheme(content: @Composable () -> Unit) {
-    MaterialTheme(colorScheme = DarkColors, typography = TuneTypography, content = content)
+fun GhostlyTheme(content: @Composable () -> Unit) {
+    MaterialTheme(colorScheme = DarkColors, typography = GhostlyTypography, content = content)
 }

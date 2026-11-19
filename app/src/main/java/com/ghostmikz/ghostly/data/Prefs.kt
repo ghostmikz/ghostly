@@ -1,9 +1,9 @@
-package com.ghostmikz.tune.data
+package com.ghostmikz.ghostly.data
 
 import android.content.Context
 import android.content.SharedPreferences
-import com.ghostmikz.tune.BuildConfig
-import com.ghostmikz.tune.lastfm.LastFM
+import com.ghostmikz.ghostly.BuildConfig
+import com.ghostmikz.ghostly.lastfm.LastFM
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -27,7 +27,7 @@ object Prefs {
     @Synchronized
     fun init(context: Context) {
         if (::sp.isInitialized) return
-        sp = context.applicationContext.getSharedPreferences("tune", Context.MODE_PRIVATE)
+        sp = context.applicationContext.getSharedPreferences("ghostly", Context.MODE_PRIVATE)
         _lastfmUser.value = sp.getString("lastfm_user", "").orEmpty()
         _scrobble.value = sp.getBoolean("scrobble", true)
         _nowPlaying.value = sp.getBoolean("now_playing", true)

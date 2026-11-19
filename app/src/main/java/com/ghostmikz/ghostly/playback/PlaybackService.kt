@@ -1,4 +1,4 @@
-package com.ghostmikz.tune.playback
+package com.ghostmikz.ghostly.playback
 
 import android.app.PendingIntent
 import android.content.Intent
@@ -9,11 +9,11 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
-import com.ghostmikz.tune.MainActivity
-import com.ghostmikz.tune.data.History
-import com.ghostmikz.tune.data.Prefs
-import com.ghostmikz.tune.lastfm.ScrobbleManager
-import com.ghostmikz.tune.lastfm.ScrobbleTrack
+import com.ghostmikz.ghostly.MainActivity
+import com.ghostmikz.ghostly.data.History
+import com.ghostmikz.ghostly.data.Prefs
+import com.ghostmikz.ghostly.lastfm.ScrobbleManager
+import com.ghostmikz.ghostly.lastfm.ScrobbleTrack
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob

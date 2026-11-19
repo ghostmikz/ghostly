@@ -1,4 +1,4 @@
-# Tune
+# Ghostly
 
 A simple, offline music player for Android. It plays the audio files on your phone.
 The only online feature is optional Last.fm scrobbling.

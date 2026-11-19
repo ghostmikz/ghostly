@@ -1,4 +1,4 @@
-package com.ghostmikz.tune.ui
+package com.ghostmikz.ghostly.ui
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -22,10 +22,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.ghostmikz.tune.data.History
-import com.ghostmikz.tune.data.Library
-import com.ghostmikz.tune.data.Song
-import com.ghostmikz.tune.ui.icons.BitChordIcons
+import com.ghostmikz.ghostly.data.History
+import com.ghostmikz.ghostly.data.Library
+import com.ghostmikz.ghostly.data.Song
+import com.ghostmikz.ghostly.ui.icons.BitChordIcons
 import java.time.LocalDate
 import kotlin.random.Random
 
@@ -57,7 +57,7 @@ fun HomeScreen(library: Library, actions: LibraryActions, bottomPad: Dp) {
     val mixes = buildList {
         add(Mix("Mix for You", "Shuffle All", "Every song on this phone, in a random order.", Color(0xFF33AEF0), songs, true))
         if (most.size >= 3) add(Mix("Made from your plays", "On Repeat", "The songs you keep coming back to.", Color(0xFF8E5BF0), most, false))
-        if (favorites.isNotEmpty()) add(Mix("Starred by you", "Favorites", "${countText(favorites.size, "song")} you starred.", TuneColors.Accent, favorites, true))
+        if (favorites.isNotEmpty()) add(Mix("Starred by you", "Favorites", "${countText(favorites.size, "song")} you starred.", GhostlyColors.Accent, favorites, true))
         add(Mix("Fresh on your phone", "Recently Added", "The newest files in your library.", Color(0xFF2FB874), added, false))
     }
 
@@ -69,7 +69,7 @@ fun HomeScreen(library: Library, actions: LibraryActions, bottomPad: Dp) {
         if (songs.isEmpty()) {
             item {
                 Text("No music on this phone yet. Copy some audio files (for example into the Music folder) and they show up here.",
-                    color = TuneColors.TextSecondary, fontSize = 16.sp, modifier = Modifier.padding(16.dp))
+                    color = GhostlyColors.TextSecondary, fontSize = 16.sp, modifier = Modifier.padding(16.dp))
             }
             return@LazyColumn
         }

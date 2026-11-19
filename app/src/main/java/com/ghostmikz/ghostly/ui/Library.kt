@@ -1,4 +1,4 @@
-package com.ghostmikz.tune.ui
+package com.ghostmikz.ghostly.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -29,11 +29,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.ghostmikz.tune.data.Album
-import com.ghostmikz.tune.data.Artist
-import com.ghostmikz.tune.data.Library
-import com.ghostmikz.tune.data.Song
-import com.ghostmikz.tune.ui.icons.BitChordIcons
+import com.ghostmikz.ghostly.data.Album
+import com.ghostmikz.ghostly.data.Artist
+import com.ghostmikz.ghostly.data.Library
+import com.ghostmikz.ghostly.data.Song
+import com.ghostmikz.ghostly.ui.icons.BitChordIcons
 
 /** Everything a screen can ask the app to do. */
 class LibraryActions(
@@ -121,7 +121,7 @@ fun AlbumTile(album: Album, onClick: () -> Unit) {
         AlbumArt(album.songs.first(), Modifier.fillMaxWidth().aspectRatio(1f), corner = 10.dp, px = 400)
         Spacer(Modifier.height(8.dp))
         Text(album.title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(album.artist, color = TuneColors.TextSecondary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(album.artist, color = GhostlyColors.TextSecondary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -133,7 +133,7 @@ fun ArtistRow(artist: Artist, onClick: () -> Unit) {
             Column(Modifier.padding(vertical = 12.dp)) {
                 Text(artist.name, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(countText(artist.albums.size, "album") + "  ·  " + countText(artist.songs.size, "song"),
-                    color = TuneColors.TextSecondary, fontSize = 15.sp)
+                    color = GhostlyColors.TextSecondary, fontSize = 15.sp)
             }
             HorizontalDivider(thickness = 0.5.dp, color = Color(0xFF242426))
         }
@@ -143,13 +143,13 @@ fun ArtistRow(artist: Artist, onClick: () -> Unit) {
 @Composable
 fun IconRow(icon: ImageVector, title: String, subtitle: String, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(52.dp).clip(RoundedCornerShape(6.dp)).background(TuneColors.Card), Alignment.Center) {
+        Box(Modifier.size(52.dp).clip(RoundedCornerShape(6.dp)).background(GhostlyColors.Card), Alignment.Center) {
             Icon(icon, null, tint = Color(0xFF636366), modifier = Modifier.size(28.dp))
         }
         Column(Modifier.weight(1f).padding(start = 14.dp)) {
             Column(Modifier.padding(vertical = 12.dp)) {
                 Text(title, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(subtitle, color = TuneColors.TextSecondary, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(subtitle, color = GhostlyColors.TextSecondary, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             HorizontalDivider(thickness = 0.5.dp, color = Color(0xFF242426))
         }
@@ -180,13 +180,13 @@ fun CollectionScreen(
                 Text(title, color = Color.White, fontSize = 30.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.6).sp,
                     textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 24.dp))
                 if (subtitle.isNotEmpty()) {
-                    Text(subtitle, color = TuneColors.TextSecondary, fontSize = 22.sp, textAlign = TextAlign.Center,
+                    Text(subtitle, color = GhostlyColors.TextSecondary, fontSize = 22.sp, textAlign = TextAlign.Center,
                         maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 24.dp))
                 }
                 Spacer(Modifier.height(6.dp))
                 Text(
                     "${countText(songs.size, "Track")}  ·  ${formatShort(songs.sumOf { it.durationMs })}",
-                    color = TuneColors.TextSecondary, fontSize = 15.sp,
+                    color = GhostlyColors.TextSecondary, fontSize = 15.sp,
                 )
                 Spacer(Modifier.height(22.dp))
                 if (songs.isNotEmpty()) {
@@ -200,7 +200,7 @@ fun CollectionScreen(
             }
         }
         if (songs.isEmpty()) item {
-            Text(emptyText, color = TuneColors.TextSecondary, fontSize = 16.sp, textAlign = TextAlign.Center,
+            Text(emptyText, color = GhostlyColors.TextSecondary, fontSize = 16.sp, textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth().padding(32.dp))
         }
         itemsIndexed(songs, key = { _, s -> s.id }) { i, s ->

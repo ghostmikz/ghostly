@@ -1,4 +1,4 @@
-package com.ghostmikz.tune.data
+package com.ghostmikz.ghostly.data
 
 import android.content.Context
 import kotlinx.coroutines.flow.MutableStateFlow

@@ -1,5 +1,5 @@
 // Adapted from BitChord (https://github.com/kushagrasinghx/BitChord), GPLv3.
-package com.ghostmikz.tune.lastfm
+package com.ghostmikz.ghostly.lastfm
 
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
@@ -87,7 +87,7 @@ object LastFM {
         extra: Map<String, String> = emptyMap(),
         format: String = "json",
     ) {
-        headers.append(HttpHeaders.UserAgent, "Tune (local music player)")
+        headers.append(HttpHeaders.UserAgent, "Ghostly (local music player)")
         val paramsForSig =
             mutableMapOf(
                 "method" to method,

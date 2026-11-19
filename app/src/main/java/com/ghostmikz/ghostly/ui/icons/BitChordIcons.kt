@@ -1,5 +1,5 @@
 // From BitChord (https://github.com/kushagrasinghx/BitChord), GPLv3.
-package com.ghostmikz.tune.ui.icons
+package com.ghostmikz.ghostly.ui.icons
 
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathFillType

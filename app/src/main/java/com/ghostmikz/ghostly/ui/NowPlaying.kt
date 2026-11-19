@@ -1,4 +1,4 @@
-package com.ghostmikz.tune.ui
+package com.ghostmikz.ghostly.ui
 
 import android.content.Context
 import android.media.AudioManager
@@ -54,9 +54,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.media3.common.Player
-import com.ghostmikz.tune.R
-import com.ghostmikz.tune.data.History
-import com.ghostmikz.tune.ui.icons.BitChordIcons
+import com.ghostmikz.ghostly.R
+import com.ghostmikz.ghostly.data.History
+import com.ghostmikz.ghostly.ui.icons.BitChordIcons
 import kotlinx.coroutines.delay
 
 private val Dim = Color.White.copy(alpha = 0.55f)
@@ -67,8 +67,8 @@ fun NowPlayingScreen(state: PlayerState, vm: PlayerViewModel, actions: LibraryAc
     val song = state.current
     val art = rememberArt(song, 1000)
     val colors = remember(art) { art?.artColors() }
-    val top by animateColorAsState(colors?.top ?: TuneColors.Player, tween(600), label = "top")
-    val bottom by animateColorAsState(colors?.bottom ?: TuneColors.Player, tween(600), label = "bottom")
+    val top by animateColorAsState(colors?.top ?: GhostlyColors.Player, tween(600), label = "top")
+    val bottom by animateColorAsState(colors?.bottom ?: GhostlyColors.Player, tween(600), label = "bottom")
     val favs by History.favorites.collectAsState()
     var showQueue by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
@@ -126,7 +126,7 @@ fun NowPlayingScreen(state: PlayerState, vm: PlayerViewModel, actions: LibraryAc
                 Spacer(Modifier.width(12.dp))
                 Box {
                     RoundGlassButton(Icons.Rounded.MoreHoriz, "More") { showMenu = true }
-                    DropdownMenu(showMenu, { showMenu = false }, containerColor = TuneColors.Card, shape = RoundedCornerShape(14.dp)) {
+                    DropdownMenu(showMenu, { showMenu = false }, containerColor = GhostlyColors.Card, shape = RoundedCornerShape(14.dp)) {
                         if (song != null) SongMenuItems(song, actions.copyClosing(onClose)) { showMenu = false }
                     }
                 }
@@ -300,7 +300,7 @@ private fun VolumeBar() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun QueueSheet(state: PlayerState, vm: PlayerViewModel, onDismiss: () -> Unit) {
-    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = TuneColors.Card, contentColor = Color.White) {
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = GhostlyColors.Card, contentColor = Color.White) {
         Text("Playing Next", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
         val list = rememberLazyListState(initialFirstVisibleItemIndex = state.queueIndex.coerceAtLeast(0))
@@ -315,7 +315,7 @@ private fun QueueSheet(state: PlayerState, vm: PlayerViewModel, onDismiss: () ->
                     Column(Modifier.weight(1f).padding(horizontal = 14.dp)) {
                         Text(s.title, color = Color.White, fontSize = 16.sp, fontWeight = if (now) FontWeight.Bold else FontWeight.Medium,
                             maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(s.artist, color = TuneColors.TextSecondary, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(s.artist, color = GhostlyColors.TextSecondary, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     if (now) EqBars(Modifier.size(18.dp))
                 }

@@ -1,4 +1,4 @@
-package com.ghostmikz.tune.ui
+package com.ghostmikz.ghostly.ui
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.LinearEasing
@@ -35,9 +35,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.ghostmikz.tune.R
-import com.ghostmikz.tune.data.Song
-import com.ghostmikz.tune.ui.icons.BitChordIcons
+import com.ghostmikz.ghostly.R
+import com.ghostmikz.ghostly.data.Song
+import com.ghostmikz.ghostly.ui.icons.BitChordIcons
 
 private fun Modifier.plainClick(onClick: () -> Unit) =
     clickable(interactionSource = null, indication = null, onClick = onClick)
@@ -48,8 +48,8 @@ private fun Modifier.plainClick(onClick: () -> Unit) =
 @Composable
 fun CircleButton(icon: ImageVector, description: String, size: Dp = 48.dp, onClick: () -> Unit) {
     Box(
-        Modifier.size(size).clip(CircleShape).background(TuneColors.Surface)
-            .border(1.dp, TuneColors.Card, CircleShape).clickable(onClick = onClick),
+        Modifier.size(size).clip(CircleShape).background(GhostlyColors.Surface)
+            .border(1.dp, GhostlyColors.Card, CircleShape).clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) { Icon(icon, description, tint = Color.White, modifier = Modifier.size(size * 0.5f)) }
 }
@@ -67,8 +67,8 @@ fun PlayShuffleButtons(onPlay: () -> Unit, onShuffle: () -> Unit, modifier: Modi
             Text("Play", color = Color.Black, fontSize = 19.sp, fontWeight = FontWeight.SemiBold)
         }
         Row(
-            Modifier.weight(1f).height(50.dp).clip(CircleShape).background(TuneColors.Surface)
-                .border(1.dp, TuneColors.Outline, CircleShape).clickable(onClick = onShuffle),
+            Modifier.weight(1f).height(50.dp).clip(CircleShape).background(GhostlyColors.Surface)
+                .border(1.dp, GhostlyColors.Outline, CircleShape).clickable(onClick = onShuffle),
             horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(BitChordIcons.Shuffle, null, tint = Color.White, modifier = Modifier.size(22.dp))
@@ -83,7 +83,7 @@ fun PlayShuffleButtons(onPlay: () -> Unit, onShuffle: () -> Unit, modifier: Modi
 fun SegmentedTabs(labels: List<String>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier) {
     Row(
         modifier.fillMaxWidth().padding(horizontal = 16.dp).height(42.dp).clip(CircleShape)
-            .background(TuneColors.Card).padding(4.dp),
+            .background(GhostlyColors.Card).padding(4.dp),
     ) {
         labels.forEachIndexed { i, label ->
             val bg by animateColorAsState(if (i == selected) Color(0xFF5A5A5E) else Color.Transparent, label = "seg")
@@ -128,7 +128,7 @@ fun SongRow(
         if (trackNumber != null) {
             Box(Modifier.width(28.dp), contentAlignment = Alignment.CenterStart) {
                 if (playing) EqBars(Modifier.size(16.dp))
-                else Text(if (trackNumber > 0) "$trackNumber" else "-", color = TuneColors.TextSecondary, fontSize = 16.sp)
+                else Text(if (trackNumber > 0) "$trackNumber" else "-", color = GhostlyColors.TextSecondary, fontSize = 16.sp)
             }
         } else {
             Box(Modifier.size(52.dp)) {
@@ -145,14 +145,14 @@ fun SongRow(
                 Column(Modifier.weight(1f)) {
                     Text(song.title, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Medium,
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(song.artist, color = TuneColors.TextSecondary, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(song.artist, color = GhostlyColors.TextSecondary, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                Text(formatTime(song.durationMs), color = TuneColors.TextSecondary, fontSize = 15.sp,
+                Text(formatTime(song.durationMs), color = GhostlyColors.TextSecondary, fontSize = 15.sp,
                     modifier = Modifier.padding(start = 8.dp))
                 Box {
                     IconButton(onClick = { open = true }) { Icon(Icons.Rounded.MoreVert, "More", tint = Color.White) }
                     DropdownMenu(expanded = open, onDismissRequest = { open = false },
-                        containerColor = TuneColors.Card, shape = RoundedCornerShape(14.dp)) { menu { open = false } }
+                        containerColor = GhostlyColors.Card, shape = RoundedCornerShape(14.dp)) { menu { open = false } }
                 }
             }
             HorizontalDivider(thickness = 0.5.dp, color = Color(0xFF242426))
@@ -169,7 +169,7 @@ fun SquareCard(song: Song?, title: String, subtitle: String, width: Dp = 160.dp,
         Text(title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1,
             overflow = TextOverflow.Ellipsis, modifier = if (round) Modifier.align(Alignment.CenterHorizontally) else Modifier)
         if (subtitle.isNotEmpty()) {
-            Text(subtitle, color = TuneColors.TextSecondary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            Text(subtitle, color = GhostlyColors.TextSecondary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
                 modifier = if (round) Modifier.align(Alignment.CenterHorizontally) else Modifier)
         }
     }
@@ -192,7 +192,7 @@ fun NavRow(icon: ImageVector, label: String, onClick: () -> Unit) {
         Column(Modifier.weight(1f).padding(start = 22.dp)) {
             Row(Modifier.padding(vertical = 16.dp, horizontal = 0.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(label, color = Color.White, fontSize = 19.sp, modifier = Modifier.weight(1f))
-                Icon(BitChordIcons.ChevronRight, null, tint = TuneColors.TextSecondary,
+                Icon(BitChordIcons.ChevronRight, null, tint = GhostlyColors.TextSecondary,
                     modifier = Modifier.padding(end = 16.dp).size(18.dp))
             }
             HorizontalDivider(thickness = 0.5.dp, color = Color(0xFF242426))
@@ -213,8 +213,8 @@ fun FloatingTabBar(tabs: List<TabItem>, selected: Int, onSelect: (Int) -> Unit, 
     ) {
         tabs.forEachIndexed { i, tab ->
             val on = i == selected
-            val bg by animateColorAsState(if (on) TuneColors.CardHigh else Color.Transparent, label = "tab")
-            val fg = if (on) Color.White else TuneColors.TextSecondary
+            val bg by animateColorAsState(if (on) GhostlyColors.CardHigh else Color.Transparent, label = "tab")
+            val fg = if (on) Color.White else GhostlyColors.TextSecondary
             Column(
                 Modifier.weight(1f).fillMaxHeight().clip(CircleShape).background(bg).plainClick { onSelect(i) },
                 horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center,
@@ -243,7 +243,7 @@ fun MiniPlayer(state: PlayerState, vm: PlayerViewModel, onOpen: () -> Unit, modi
         Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
             Text(song.title, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold,
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(song.artist, color = TuneColors.TextSecondary, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(song.artist, color = GhostlyColors.TextSecondary, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         Icon(
             painterResource(if (state.isPlaying) R.drawable.ic_player_pause else R.drawable.ic_player_play),
@@ -262,7 +262,7 @@ fun MiniPlayer(state: PlayerState, vm: PlayerViewModel, onOpen: () -> Unit, modi
 
 @Composable
 fun SongMenuItems(song: Song, actions: LibraryActions, onDismiss: () -> Unit) {
-    val favs by com.ghostmikz.tune.data.History.favorites.collectAsState()
+    val favs by com.ghostmikz.ghostly.data.History.favorites.collectAsState()
     val fav = song.id in favs
     @Composable
     fun item(text: String, icon: ImageVector, run: () -> Unit) = DropdownMenuItem(
@@ -272,7 +272,7 @@ fun SongMenuItems(song: Song, actions: LibraryActions, onDismiss: () -> Unit) {
     )
     item("Play next", BitChordIcons.Queue) { actions.playNext(song) }
     item(if (fav) "Remove from favorites" else "Add to favorites", if (fav) BitChordIcons.StarFilled else BitChordIcons.Star) {
-        com.ghostmikz.tune.data.History.toggleFavorite(song.id)
+        com.ghostmikz.ghostly.data.History.toggleFavorite(song.id)
     }
     item("Go to album", BitChordIcons.Library) { actions.openAlbum(song.albumId) }
     item("Go to artist", BitChordIcons.MusicNote) { actions.openArtist(song.artist) }

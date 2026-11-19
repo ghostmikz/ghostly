@@ -1,5 +1,5 @@
 // Adapted from BitChord's ScrobbleManager (https://github.com/kushagrasinghx/BitChord), GPLv3.
-package com.ghostmikz.tune.lastfm
+package com.ghostmikz.ghostly.lastfm
 
 import android.util.Log
 import kotlinx.coroutines.CancellationException

@@ -1,4 +1,4 @@
-package com.ghostmikz.tune.ui
+package com.ghostmikz.ghostly.ui
 
 import android.app.Application
 import android.content.ComponentName
@@ -9,10 +9,10 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
-import com.ghostmikz.tune.data.Library
-import com.ghostmikz.tune.data.MusicRepository
-import com.ghostmikz.tune.data.Song
-import com.ghostmikz.tune.playback.PlaybackService
+import com.ghostmikz.ghostly.data.Library
+import com.ghostmikz.ghostly.data.MusicRepository
+import com.ghostmikz.ghostly.data.Song
+import com.ghostmikz.ghostly.playback.PlaybackService
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow

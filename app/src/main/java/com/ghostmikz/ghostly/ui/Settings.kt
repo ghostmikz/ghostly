@@ -1,4 +1,4 @@
-package com.ghostmikz.tune.ui
+package com.ghostmikz.ghostly.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -25,9 +25,9 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.ghostmikz.tune.BuildConfig
-import com.ghostmikz.tune.data.Prefs
-import com.ghostmikz.tune.lastfm.LastFM
+import com.ghostmikz.ghostly.BuildConfig
+import com.ghostmikz.ghostly.data.Prefs
+import com.ghostmikz.ghostly.lastfm.LastFM
 import kotlinx.coroutines.launch
 
 @Composable
@@ -61,7 +61,7 @@ fun SettingsScreen(songCount: Int, onRescan: () -> Unit, bottomPad: Dp, onBack: 
 
         GroupLabel("About")
         Group {
-            InfoRow("Tune ${BuildConfig.VERSION_NAME}",
+            InfoRow("Ghostly ${BuildConfig.VERSION_NAME}",
                 "Offline music player. GPLv3. Design and Last.fm code adapted from BitChord by kushagrasinghx. Font: Inter (OFL).")
         }
     }
@@ -71,23 +71,23 @@ fun SettingsScreen(songCount: Int, onRescan: () -> Unit, bottomPad: Dp, onBack: 
 
 @Composable
 private fun GroupLabel(text: String) {
-    Text(text.uppercase(), color = TuneColors.TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+    Text(text.uppercase(), color = GhostlyColors.TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
         modifier = Modifier.padding(start = 32.dp, top = 24.dp, bottom = 8.dp))
 }
 
 @Composable
 private fun Group(content: @Composable ColumnScope.() -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).clip(RoundedCornerShape(14.dp)).background(TuneColors.Card), content = content)
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).clip(RoundedCornerShape(14.dp)).background(GhostlyColors.Card), content = content)
 }
 
 @Composable
-private fun Divider() = HorizontalDivider(Modifier.padding(start = 16.dp), thickness = 0.5.dp, color = TuneColors.CardHigh)
+private fun Divider() = HorizontalDivider(Modifier.padding(start = 16.dp), thickness = 0.5.dp, color = GhostlyColors.CardHigh)
 
 @Composable
 private fun InfoRow(title: String, text: String) {
     Column(Modifier.fillMaxWidth().padding(16.dp)) {
         Text(title, color = Color.White, fontSize = 17.sp)
-        Text(text, color = TuneColors.TextSecondary, fontSize = 14.sp)
+        Text(text, color = GhostlyColors.TextSecondary, fontSize = 14.sp)
     }
 }
 
@@ -96,10 +96,10 @@ private fun ActionRow(title: String, text: String, button: String, filled: Boole
     Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(title, color = Color.White, fontSize = 17.sp)
-            Text(text, color = TuneColors.TextSecondary, fontSize = 14.sp)
+            Text(text, color = GhostlyColors.TextSecondary, fontSize = 14.sp)
         }
         Box(
-            Modifier.clip(CircleShape).background(if (filled) Color.White else TuneColors.CardHigh)
+            Modifier.clip(CircleShape).background(if (filled) Color.White else GhostlyColors.CardHigh)
                 .clickable(onClick = onClick).padding(horizontal = 18.dp, vertical = 9.dp),
         ) { Text(button, color = if (filled) Color.Black else Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold) }
     }
@@ -109,14 +109,14 @@ private fun ActionRow(title: String, text: String, button: String, filled: Boole
 private fun SwitchRow(title: String, text: String, on: Boolean, onChange: (Boolean) -> Unit, enabled: Boolean = true) {
     Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f).padding(end = 12.dp)) {
-            Text(title, color = if (enabled) Color.White else TuneColors.TextSecondary, fontSize = 17.sp)
-            Text(text, color = TuneColors.TextSecondary, fontSize = 14.sp)
+            Text(title, color = if (enabled) Color.White else GhostlyColors.TextSecondary, fontSize = 17.sp)
+            Text(text, color = GhostlyColors.TextSecondary, fontSize = 14.sp)
         }
         Switch(
             on, onChange, enabled = enabled,
             colors = SwitchDefaults.colors(
                 checkedThumbColor = Color.White, checkedTrackColor = Color(0xFF34C759),
-                uncheckedThumbColor = Color.White, uncheckedTrackColor = TuneColors.CardHigh, uncheckedBorderColor = Color.Transparent,
+                uncheckedThumbColor = Color.White, uncheckedTrackColor = GhostlyColors.CardHigh, uncheckedBorderColor = Color.Transparent,
             ),
         )
     }
@@ -131,17 +131,17 @@ private fun LastfmLoginDialog(onDismiss: () -> Unit) {
     var loading by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val fieldColors = OutlinedTextFieldDefaults.colors(
-        focusedBorderColor = Color.White, unfocusedBorderColor = TuneColors.CardHigh,
+        focusedBorderColor = Color.White, unfocusedBorderColor = GhostlyColors.CardHigh,
         focusedLabelColor = Color.White, cursorColor = Color.White,
     )
 
     AlertDialog(
         onDismissRequest = { if (!loading) onDismiss() },
-        containerColor = TuneColors.Card,
+        containerColor = GhostlyColors.Card,
         title = { Text("Sign in to Last.fm", color = Color.White) },
         text = {
             Column {
-                error?.let { Text(it, color = TuneColors.Accent, fontSize = 13.sp, modifier = Modifier.padding(bottom = 8.dp)) }
+                error?.let { Text(it, color = GhostlyColors.Accent, fontSize = 13.sp, modifier = Modifier.padding(bottom = 8.dp)) }
                 OutlinedTextField(username, { username = it }, label = { Text("Username") }, singleLine = true,
                     colors = fieldColors, modifier = Modifier.fillMaxWidth())
                 Spacer(Modifier.height(8.dp))
@@ -158,7 +158,7 @@ private fun LastfmLoginDialog(onDismiss: () -> Unit) {
                 )
                 Spacer(Modifier.height(8.dp))
                 Text("Your password is sent to Last.fm once to get a session. It is not saved.",
-                    color = TuneColors.TextSecondary, fontSize = 12.sp)
+                    color = GhostlyColors.TextSecondary, fontSize = 12.sp)
             }
         },
         confirmButton = {
@@ -176,6 +176,6 @@ private fun LastfmLoginDialog(onDismiss: () -> Unit) {
                 },
             ) { Text(if (loading) "Signing in..." else "Sign in", color = Color.White, fontWeight = FontWeight.SemiBold) }
         },
-        dismissButton = { TextButton(onClick = onDismiss, enabled = !loading) { Text("Cancel", color = TuneColors.TextSecondary) } },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !loading) { Text("Cancel", color = GhostlyColors.TextSecondary) } },
     )
 }

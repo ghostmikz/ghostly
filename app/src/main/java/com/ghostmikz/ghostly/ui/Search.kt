@@ -1,4 +1,4 @@
-package com.ghostmikz.tune.ui
+package com.ghostmikz.ghostly.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -23,8 +23,8 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.ghostmikz.tune.data.Library
-import com.ghostmikz.tune.ui.icons.BitChordIcons
+import com.ghostmikz.ghostly.data.Library
+import com.ghostmikz.ghostly.ui.icons.BitChordIcons
 
 @Composable
 fun SearchScreen(library: Library, currentId: Long?, actions: LibraryActions, bottomPad: Dp) {
@@ -43,27 +43,27 @@ fun SearchScreen(library: Library, currentId: Long?, actions: LibraryActions, bo
             BigTitle("Search")
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).height(48.dp)
-                    .clip(RoundedCornerShape(14.dp)).background(TuneColors.Card).padding(horizontal = 14.dp),
+                    .clip(RoundedCornerShape(14.dp)).background(GhostlyColors.Card).padding(horizontal = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(BitChordIcons.Search, null, tint = TuneColors.TextSecondary, modifier = Modifier.size(20.dp))
+                Icon(BitChordIcons.Search, null, tint = GhostlyColors.TextSecondary, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(10.dp))
                 Box(Modifier.weight(1f)) {
-                    if (query.isEmpty()) Text("Artists, Songs, Albums", color = TuneColors.TextSecondary, fontSize = 17.sp)
+                    if (query.isEmpty()) Text("Artists, Songs, Albums", color = GhostlyColors.TextSecondary, fontSize = 17.sp)
                     BasicTextField(
                         query, { query = it }, singleLine = true,
                         textStyle = TextStyle(color = Color.White, fontSize = 17.sp, fontFamily = Inter),
-                        cursorBrush = SolidColor(TuneColors.Accent), modifier = Modifier.fillMaxWidth(),
+                        cursorBrush = SolidColor(GhostlyColors.Accent), modifier = Modifier.fillMaxWidth(),
                     )
                 }
                 if (query.isNotEmpty()) {
-                    Icon(Icons.Rounded.Cancel, "Clear", tint = TuneColors.TextSecondary,
+                    Icon(Icons.Rounded.Cancel, "Clear", tint = GhostlyColors.TextSecondary,
                         modifier = Modifier.size(22.dp).clickable { query = "" })
                 }
             }
         }
         if (q.isNotEmpty() && songs.isEmpty() && albums.isEmpty() && artists.isEmpty()) item {
-            Text("No results for \"$q\".", color = TuneColors.TextSecondary, fontSize = 16.sp, modifier = Modifier.padding(16.dp))
+            Text("No results for \"$q\".", color = GhostlyColors.TextSecondary, fontSize = 16.sp, modifier = Modifier.padding(16.dp))
         }
         if (artists.isNotEmpty()) {
             item { ShelfTitle("Artists") }

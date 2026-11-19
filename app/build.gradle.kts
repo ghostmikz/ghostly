@@ -18,11 +18,11 @@ fun prop(name: String): String =
         .replace("\\", "\\\\").replace("\"", "\\\"")
 
 android {
-    namespace = "com.ghostmikz.tune"
+    namespace = "com.ghostmikz.ghostly"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.ghostmikz.tune"
+        applicationId = "com.ghostmikz.ghostly"
         minSdk = 26
         targetSdk = 36
         versionCode = 1
