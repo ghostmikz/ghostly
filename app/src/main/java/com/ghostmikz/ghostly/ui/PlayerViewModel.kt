@@ -1,5 +1,8 @@
 package com.ghostmikz.ghostly.ui
 
+import com.ghostmikz.ghostly.playback.asQueueEntry
+import com.ghostmikz.ghostly.playback.QueueTier
+import com.ghostmikz.ghostly.playback.QueueShuffle
 import android.app.Application
 import android.content.ComponentName
 import androidx.lifecycle.AndroidViewModel
@@ -52,6 +55,8 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             c.addListener(object : Player.Listener {
                 override fun onEvents(player: Player, events: Player.Events) = refresh()
             })
+            // Shuffle is BitChord's queue edit, not the player's mode: follow its state.
+            launch { QueueShuffle.enabled.collect { refresh() } }
             refresh()
             while (isActive) {
                 if (c.isPlaying) _state.value = _state.value.copy(positionMs = c.currentPosition)
@@ -86,7 +91,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             isPlaying = c.isPlaying,
             positionMs = c.currentPosition,
             durationMs = c.duration.takeIf { it > 0 } ?: 0,
-            shuffle = c.shuffleModeEnabled,
+            shuffle = QueueShuffle.enabled.value,
             repeat = c.repeatMode,
             queue = queue,
             queueIndex = order.indexOf(c.currentMediaItemIndex),
@@ -98,9 +103,19 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         val c = controller ?: return
         if (songs.isEmpty()) return
         this.from = from
-        c.shuffleModeEnabled = shuffle
-        val first = if (shuffle) songs.indices.random() else start
-        c.setMediaItems(songs.map { it.toMediaItem() }, first, 0)
+        // BitChord: the player's own shuffle is never used. Shuffle is the queue
+        // itself rearranged, so what the queue shows is what plays, in order.
+        c.shuffleModeEnabled = false
+        val items = songs.map { it.toMediaItem().asQueueEntry(QueueTier.CONTEXT) }
+        QueueShuffle.clearCanonicalContext()
+        if (shuffle) {
+            QueueShuffle.enableForNextQueue()
+            c.setMediaItems(QueueShuffle.startingOrder(items, songs.indices.random()), 0, 0)
+        } else {
+            QueueShuffle.setEnabled(false)
+            QueueShuffle.setCanonicalContext(items)
+            c.setMediaItems(items, start, 0)
+        }
         c.prepare()
         c.play()
     }
@@ -135,7 +150,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         }
         return out
     }
-    fun toggleShuffle() = controller?.let { it.shuffleModeEnabled = !it.shuffleModeEnabled }
+    fun toggleShuffle() = controller?.let { QueueShuffle.toggle(it) }
     fun cycleRepeat() = controller?.let {
         it.repeatMode = when (it.repeatMode) {
             Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL
@@ -143,8 +158,13 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             else -> Player.REPEAT_MODE_OFF
         }
     }
+    /**
+     * BitChord's "Play next": straight after the current track, at the head of
+     * the user's own queue, tagged so a later shuffle leaves it where it is.
+     */
     fun playNext(song: Song) = controller?.let { c ->
-        if (c.mediaItemCount == 0) play(listOf(song), from = song.title) else c.addMediaItem(c.currentMediaItemIndex + 1, song.toMediaItem())
+        if (c.mediaItemCount == 0) play(listOf(song), from = song.title)
+        else c.addMediaItem(c.currentMediaItemIndex + 1, song.toMediaItem().asQueueEntry(QueueTier.USER_QUEUE))
     }
 
     override fun onCleared() {

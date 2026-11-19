@@ -215,6 +215,8 @@ class PlaybackService : MediaSessionService() {
             QueueStore.restore(this@PlaybackService, player)
             publishWidgetState()
         }
+        // Shuffle is a queue edit (BitChord's QueueShuffle), so the widget follows its state.
+        scope.launch { QueueShuffle.enabled.collect { publishWidgetState(); QueueStore.save(this@PlaybackService, player) } }
         // A like from the app or the player moves the widget's star too.
         scope.launch { History.favorites.collect { publishWidgetState() } }
     }
@@ -245,7 +247,7 @@ class PlaybackService : MediaSessionService() {
             val player = session.player
             when (customCommand.customAction) {
                 ACTION_TOGGLE_FAVORITE -> player.currentMediaItem?.mediaId?.toLongOrNull()?.let { Playlists.toggleLike(it) }
-                ACTION_TOGGLE_SHUFFLE -> player.shuffleModeEnabled = !player.shuffleModeEnabled
+                ACTION_TOGGLE_SHUFFLE -> QueueShuffle.toggle(player)
                 else -> return Futures.immediateFuture(SessionResult(SessionError.ERROR_NOT_SUPPORTED))
             }
             return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
@@ -275,7 +277,7 @@ class PlaybackService : MediaSessionService() {
             hasNext = player.hasNextMediaItem(),
             isLiked = id.toLongOrNull()?.let { it in History.favorites.value } ?: false,
             canLike = id.toLongOrNull() != null,
-            shuffleEnabled = player.shuffleModeEnabled,
+            shuffleEnabled = QueueShuffle.enabled.value,
         )
         MediaWidgetSnapshot.save(this, snapshot)
         MediaWidget.refresh(this)
