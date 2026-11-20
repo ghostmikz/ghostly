@@ -10,6 +10,8 @@
 package com.ghostmikz.ghostly.playback.bitperfect
 
 import android.media.AudioTrack
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import androidx.annotation.OptIn
@@ -247,6 +249,7 @@ internal class BitPerfectAudioSink(
     override fun play() {
         playing = true
         pausedAtMs = NOT_PAUSED
+        cancelIdleCheck()
         startIfReady()
     }
 
@@ -255,6 +258,26 @@ internal class BitPerfectAudioSink(
         transportStarted = false
         pausedAtMs = clock()
         runCatching { transport?.pause() }
+        scheduleIdleCheck()
+    }
+
+    /**
+     * Once the queue has ended Media3 stops calling the sink at all, so the
+     * idle release can't wait for the next buffer: a timer on the playback
+     * thread (the one pause() is called on) runs it instead.
+     */
+    private var idleHandler: Handler? = null
+    private val idleCheck = Runnable { releaseIfIdle() }
+
+    private fun scheduleIdleCheck() {
+        val looper = Looper.myLooper() ?: return
+        val handler = idleHandler?.takeIf { it.looper == looper } ?: Handler(looper).also { idleHandler = it }
+        handler.removeCallbacks(idleCheck)
+        handler.postDelayed(idleCheck, IDLE_RELEASE_MS + IDLE_CHECK_SLACK_MS)
+    }
+
+    private fun cancelIdleCheck() {
+        idleHandler?.removeCallbacks(idleCheck)
     }
 
     override fun handleDiscontinuity() {
@@ -314,6 +337,7 @@ internal class BitPerfectAudioSink(
     }
 
     override fun reset() {
+        cancelIdleCheck()
         flush()
         closeTransport()
     }
@@ -647,6 +671,8 @@ internal class BitPerfectAudioSink(
 
         /** A pause this long releases a direct USB or AAudio exclusive device. */
         const val IDLE_RELEASE_MS = 30_000L
+        /** So the timer lands just past [IDLE_RELEASE_MS], not a hair short of it. */
+        private const val IDLE_CHECK_SLACK_MS = 250L
         private const val NOT_PAUSED = -1L
     }
 }

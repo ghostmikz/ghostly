@@ -124,10 +124,7 @@ internal object BitPerfectOutput {
             BitPerfectMode.USB_DIRECT ->
                 UsbDirectDevices.manager(context)?.let(UsbDirectDevices::audioDevice) != null
             BitPerfectMode.DAP_EXCLUSIVE -> Build.VERSION.SDK_INT >= 27 &&
-                audio?.getDevices(AudioManager.GET_DEVICES_OUTPUTS)?.any {
-                    it.type == android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
-                        it.type == android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET
-                } == true
+                audio?.let(ExclusiveTransport::wiredOutput) != null
         }
         this.attached = attached
         recomputeReady()
@@ -177,10 +174,22 @@ internal object BitPerfectOutput {
     init {
         // A detached DAC stops its stream at once rather than at the next write.
         UsbDirectDevices.onDetached = { deviceId ->
-            synchronized(this) { (active as? UsbDirectTransport)?.takeIf { it.usbDeviceId == deviceId } }
-                ?.markDetached()
+            val lost = synchronized(this) { (active as? UsbDirectTransport)?.takeIf { it.usbDeviceId == deviceId } }
+            lost?.markDetached()
+            if (lost != null) onDirectDacLost?.invoke()
         }
     }
+
+    /**
+     * The DAC direct USB was playing to was unplugged. Android sends no
+     * "becoming noisy" for it (the driver had taken it from Android), so the
+     * service pauses here instead, as unplugged headphones would.
+     */
+    @Volatile var onDirectDacLost: (() -> Unit)? = null
+
+    /** Whether Ghostly's own USB driver holds the DAC, or has just handed it back. */
+    fun holdsDirectUsb(context: Context): Boolean =
+        (status.value.active && status.value.driver == BitPerfectDriver.USB_DIRECT.label) || normalOutputPending(context)
 
     private var owner: Any? = null
     private var active: BitPerfectTransport? = null
@@ -230,8 +239,14 @@ internal object BitPerfectOutput {
             }
             // Nothing short of opening a stream says whether Android will grant
             // exclusive mode, so the first track of each format finds out.
-            BitPerfectMode.DAP_EXCLUSIVE -> Build.VERSION.SDK_INT >= 27 &&
-                key(mode, NO_DEVICE, sampleRate, channels, sourceBits) !in currentFailures(mode, NO_DEVICE)
+            // Only to wired headphones: with nothing plugged in, everything plays as
+            // normal, and exclusive mode never lands on the speaker. Failures are
+            // kept per headphone device, so new headphones get a fresh try.
+            BitPerfectMode.DAP_EXCLUSIVE -> {
+                if (Build.VERSION.SDK_INT < 27) return false
+                val wired = ExclusiveTransport.wiredOutput(manager) ?: return false
+                key(mode, wired.id, sampleRate, channels, sourceBits) !in currentFailures(mode, wired.id)
+            }
             // Permission is asked for by the service when the mode is chosen or a
             // DAC is attached; until it is granted, tracks use normal output.
             BitPerfectMode.USB_DIRECT -> {
@@ -275,16 +290,24 @@ internal object BitPerfectOutput {
                 val usb = UsbDirectDevices.manager(context) ?: throw BitPerfectTransportException("no_usb")
                 val device = UsbDirectDevices.audioDevice(usb) ?: throw BitPerfectTransportException("no_usb")
                 if (!usb.hasPermission(device)) throw BitPerfectTransportException("permission_denied")
-                UsbDirectTransport.open(
-                    manager = usb,
-                    device = device,
-                    rate = sampleRate,
-                    channels = channels,
-                    sourceBits = sourceBits,
-                    convert = convert,
-                    allowFixedVolume = Prefs.usbAllowFixedVolume.value,
-                    rememberedDb = UsbDirectDevices.rememberedVolume(device.deviceId),
-                )
+                try {
+                    UsbDirectTransport.open(
+                        manager = usb,
+                        device = device,
+                        rate = sampleRate,
+                        channels = channels,
+                        sourceBits = sourceBits,
+                        convert = convert,
+                        allowFixedVolume = Prefs.usbAllowFixedVolume.value,
+                        rememberedDb = UsbDirectDevices.rememberedVolume(device.deviceId),
+                    )
+                } catch (error: BitPerfectTransportException) {
+                    // The native side may already have taken the DAC from Android's
+                    // driver before failing, so normal output waits for it to come
+                    // back, as after any direct stream (see normalOutputPending).
+                    directReleasedAtMs = android.os.SystemClock.elapsedRealtime()
+                    throw error
+                }
             }
         }
         owner = requester
@@ -338,7 +361,9 @@ internal object BitPerfectOutput {
                 context.getSystemService(AudioManager::class.java)?.let(MixerTransport::usbDevice)?.id ?: NO_DEVICE
             BitPerfectMode.USB_DIRECT ->
                 UsbDirectDevices.manager(context)?.let(UsbDirectDevices::audioDevice)?.deviceId ?: NO_DEVICE
-            else -> NO_DEVICE
+            BitPerfectMode.DAP_EXCLUSIVE ->
+                context.getSystemService(AudioManager::class.java)?.let(ExclusiveTransport::wiredOutput)?.id ?: NO_DEVICE
+            BitPerfectMode.OFF -> NO_DEVICE
         }
         currentFailures(mode, deviceId).add(key(mode, deviceId, sampleRate, channels, sourceBits))
         Log.i(TAG, "Bit-perfect output unavailable ($reason) for $sampleRate Hz/$channels ch/$sourceBits-bit")

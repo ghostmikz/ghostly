@@ -56,7 +56,9 @@ class EnumPref<E : Enum<E>> internal constructor(private val key: String, privat
     val value: E get() = flow.value
 
     internal fun load(sp: SharedPreferences) {
-        val saved = sp.getString(key, null)
+        // Defensive: an older import could have stored this key as a Boolean,
+        // and getString on that throws, which would crash every launch.
+        val saved = runCatching { sp.getString(key, null) }.getOrNull()
         flow.value = values.firstOrNull { it.name == saved } ?: default
     }
 
@@ -253,10 +255,20 @@ object Prefs {
         nowPlayingOn.set(false)
     }
 
+    /**
+     * Never carried by a backup: each turns on full-scale output to a DAC, which
+     * only happens behind its own warning in Settings, on this phone.
+     */
+    private val NOT_BACKED_UP = setOf("bit_perfect_mode", "usb_allow_fixed_volume")
+
     /** Settings as JSON for "Export data". The Last.fm session is left out on purpose. */
     fun exportJson(): JSONObject {
         val o = JSONObject()
-        sp.all.forEach { (k, v) -> if ((v is Boolean || v is Int || v is Float || k == "theme" || k == "local_music_sort" || k == "output_pcm_mode") && !k.startsWith("lastfm_user") && !k.startsWith("lastfm_session")) o.put(k, v) }
+        sp.all.forEach { (k, v) ->
+            if ((v is Boolean || v is Int || v is Float || k == "theme" || k == "local_music_sort" || k == "output_pcm_mode") &&
+                !k.startsWith("lastfm_user") && !k.startsWith("lastfm_session") && k !in NOT_BACKED_UP
+            ) o.put(k, v)
+        }
         return o
     }
 
@@ -264,7 +276,7 @@ object Prefs {
         edit {
             o.keys().forEach { k ->
                 when {
-                    k.startsWith("lastfm_user") || k.startsWith("lastfm_session") -> Unit
+                    k.startsWith("lastfm_user") || k.startsWith("lastfm_session") || k in NOT_BACKED_UP -> Unit
                     k == "theme" -> putString(k, o.optString(k, "system"))
                     k == "local_music_sort" || k == "output_pcm_mode" -> putString(k, o.optString(k))
                     k == "scrobble_delay_percent" -> putFloat(k, o.optDouble(k, 0.5).toFloat())

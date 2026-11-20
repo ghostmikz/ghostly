@@ -103,8 +103,17 @@ class PlaybackService : MediaLibraryService() {
     /** Each player's last opened AudioTrack, for the Output precision row. */
     private val trackConfigs = java.util.WeakHashMap<ExoPlayer, AudioSink.AudioTrackConfig>()
     private val outputDeviceCallback = object : AudioDeviceCallback() {
-        override fun onAudioDevicesAdded(addedDevices: Array<AudioDeviceInfo>) = requestOutputReconfiguration()
-        override fun onAudioDevicesRemoved(removedDevices: Array<AudioDeviceInfo>) = requestOutputReconfiguration()
+        override fun onAudioDevicesAdded(addedDevices: Array<AudioDeviceInfo>) = onOutputsChanged()
+        override fun onAudioDevicesRemoved(removedDevices: Array<AudioDeviceInfo>) = onOutputsChanged()
+
+        private fun onOutputsChanged() {
+            // Ghostly's own USB driver takes the DAC from Android while it plays, so
+            // Android sees the DAC go and come back. That is not the listener
+            // changing outputs: re-deciding float on it would rebuild the player
+            // that just opened the DAC, over and over.
+            if (BitPerfectOutput.holdsDirectUsb(this@PlaybackService)) return
+            requestOutputReconfiguration()
+        }
     }
 
     override fun onCreate() {
@@ -476,6 +485,9 @@ class PlaybackService : MediaLibraryService() {
         // attach or a detach all send the playing track back to be re-routed.
         UsbDirectDevices.init(this)
         BitPerfectOutput.watch(this)
+        // Unplugging the DAC direct USB plays to pauses, as unplugged headphones
+        // do; Android can't say "becoming noisy" for a DAC it wasn't driving.
+        BitPerfectOutput.onDirectDacLost = { scope.launch { session?.player?.pause() } }
         scope.launch {
             var available = false
             DacVolume.level.collect { level ->
@@ -859,6 +871,7 @@ class PlaybackService : MediaLibraryService() {
         outputReconfigureJob?.cancel()
         audioManager?.unregisterAudioDeviceCallback(outputDeviceCallback)
         UsbDirectDevices.onChanged = null
+        BitPerfectOutput.onDirectDacLost = null
         crossfade?.release()
         crossfade = null
         scrobbler?.destroy()

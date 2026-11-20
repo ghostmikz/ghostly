@@ -74,8 +74,14 @@ internal class ExclusiveTransport private constructor(
         manager.registerAudioDeviceCallback(route, Handler(Looper.getMainLooper()))
     }
 
+    /**
+     * The write cap in whole frames: the native writer rejects a size that does
+     * not split into frames, and 3- or 6-byte frames don't divide [MAX_WRITE].
+     */
+    private val maxWrite: Int = (channelCount * (outputBits / 8)).coerceAtLeast(1).let { frame -> (MAX_WRITE / frame) * frame }
+
     override fun write(buffer: ByteBuffer): Int {
-        val count = call { ExclusiveNative.write(handle, buffer, buffer.position(), minOf(buffer.remaining(), MAX_WRITE)) }
+        val count = call { ExclusiveNative.write(handle, buffer, buffer.position(), minOf(buffer.remaining(), maxWrite)) }
         buffer.position(buffer.position() + count)
         return count
     }
@@ -125,12 +131,16 @@ internal class ExclusiveTransport private constructor(
          */
         private const val MAX_RATE_ATTEMPTS = 3
 
-        fun open(manager: AudioManager, rate: Int, channels: Int, sourceBits: Int, convert: Boolean): ExclusiveTransport {
-            val outputs = manager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
-            val wired = outputs.firstOrNull {
+        /** The wired headphones or headset this mode plays to; null with nothing plugged in. */
+        fun wiredOutput(manager: AudioManager): AudioDeviceInfo? =
+            runCatching { manager.getDevices(AudioManager.GET_DEVICES_OUTPUTS) }.getOrDefault(emptyArray()).firstOrNull {
                 it.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES || it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET
             }
-            val offered = wired?.sampleRates?.takeIf { it.isNotEmpty() }?.toList() ?: BitPerfectPcm.STANDARD_RATES
+
+        fun open(manager: AudioManager, rate: Int, channels: Int, sourceBits: Int, convert: Boolean): ExclusiveTransport {
+            // Never the default route (device 0, usually the speaker).
+            val wired = wiredOutput(manager) ?: throw BitPerfectTransportException("no_wired_output")
+            val offered = wired.sampleRates.takeIf { it.isNotEmpty() }?.toList() ?: BitPerfectPcm.STANDARD_RATES
             val rates = if (convert) BitPerfectPcm.rankRates(rate, offered + rate).take(MAX_RATE_ATTEMPTS) else listOf(rate)
             val depths = if (convert) listOf(32, 24, 16).filter { it <= sourceBits } else listOf(sourceBits)
             var openedRate = rate
@@ -139,7 +149,7 @@ internal class ExclusiveTransport private constructor(
             search@ for (candidate in rates) {
                 for (bits in depths) {
                     try {
-                        handle = ExclusiveNative.open(candidate, channels, bits, wired?.id ?: 0)
+                        handle = ExclusiveNative.open(candidate, channels, bits, wired.id)
                         openedRate = candidate
                         break@search
                     } catch (error: IllegalStateException) {
@@ -152,7 +162,7 @@ internal class ExclusiveTransport private constructor(
             if (handle == 0L) throw BitPerfectTransportException("exclusive_unavailable", failure)
             try {
                 val device = ExclusiveNative.device(handle)
-                val name = outputs.firstOrNull { it.id == device }?.productName?.toString()
+                val name = (if (wired.id == device) wired else wiredOutput(manager)?.takeIf { it.id == device })?.productName?.toString()
                     ?.takeIf { it.isNotBlank() } ?: "AAudio"
                 return ExclusiveTransport(
                     manager = manager,

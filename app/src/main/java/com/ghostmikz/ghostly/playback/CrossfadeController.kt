@@ -523,8 +523,11 @@ class CrossfadeController(
 
     // Bit-perfect output carries one stream to the DAC, unchanged. A blend needs
     // two, with gain on both, so the queue plays gapless instead (BitChord).
+    // Off from the moment the output is ready, not only once a stream is open:
+    // otherwise the standby player, pre-rolling a lossless track, would claim
+    // the DAC while a lossy track is still playing to it.
     private fun configuredFadeMs(): Long =
-        if (BitPerfectOutput.status.value.active) 0L else Prefs.crossfadeSeconds.value * 1000L
+        if (BitPerfectOutput.ready.value) 0L else Prefs.crossfadeSeconds.value * 1000L
 
     /** Never more than a third of the track. */
     private fun fadeFor(duration: Long): Long {

@@ -103,11 +103,22 @@ internal class BitPerfectRoutingSink(
             bitPerfect.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount)
         } catch (error: AudioSink.InitializationException) {
             fallBack(error)
-            normal.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount)
+            normalAfterFallBack(buffer, presentationTimeUs, encodedAccessUnitCount)
         } catch (error: AudioSink.WriteException) {
             fallBack(error)
-            normal.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount)
+            normalAfterFallBack(buffer, presentationTimeUs, encodedAccessUnitCount)
         }
+    }
+
+    /**
+     * Normal output after the exclusive one failed, behind the same hold as any
+     * other normal buffer: a failed direct USB stream leaves the DAC away from
+     * Android for a moment, and a track started then would play on the speaker.
+     * The buffer is offered again once the hold lifts.
+     */
+    private fun normalAfterFallBack(buffer: ByteBuffer, presentationTimeUs: Long, encodedAccessUnitCount: Int): Boolean {
+        if (bitPerfect.holdsNormalOutput()) return false
+        return normal.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount)
     }
 
     override fun playToEndOfStream() {

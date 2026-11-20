@@ -58,9 +58,10 @@ internal object UsbDirectDevices {
                         if (requested == device.deviceId) requested = null
                     }
                     onDetached?.invoke(device.deviceId)
-                    onChanged?.invoke()
+                    // A flash drive or a keyboard is nothing to re-route for.
+                    if (isAudio(device)) onChanged?.invoke()
                 }
-                UsbManager.ACTION_USB_DEVICE_ATTACHED -> onChanged?.invoke()
+                UsbManager.ACTION_USB_DEVICE_ATTACHED -> if (isAudio(device)) onChanged?.invoke()
                 permissionAction -> {
                     synchronized(this@UsbDirectDevices) { requested = null }
                     val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
@@ -93,12 +94,13 @@ internal object UsbDirectDevices {
 
     /** The first attached device with a USB Audio streaming interface, by device id. */
     fun audioDevice(manager: UsbManager): UsbDevice? =
-        runCatching { manager.deviceList.values }.getOrDefault(emptyList()).sortedBy { it.deviceId }.firstOrNull { device ->
-            (0 until device.interfaceCount).any {
-                val iface = device.getInterface(it)
-                iface.interfaceClass == UsbConstants.USB_CLASS_AUDIO && iface.interfaceSubclass == 2
-            }
-        }
+        runCatching { manager.deviceList.values }.getOrDefault(emptyList()).sortedBy { it.deviceId }.firstOrNull(::isAudio)
+
+    /** Whether [device] has a USB Audio streaming interface. */
+    fun isAudio(device: UsbDevice): Boolean = (0 until device.interfaceCount).any {
+        val iface = device.getInterface(it)
+        iface.interfaceClass == UsbConstants.USB_CLASS_AUDIO && iface.interfaceSubclass == 2
+    }
 
     /** Asks Android for permission to the attached DAC, once per attachment. */
     @Synchronized

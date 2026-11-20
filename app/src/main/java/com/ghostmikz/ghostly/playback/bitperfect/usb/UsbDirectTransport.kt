@@ -102,8 +102,14 @@ internal class UsbDirectTransport private constructor(
         failure = "USB disconnected"
     }
 
+    /**
+     * The write cap in whole frames: the native writer rejects a size that does
+     * not split into frames, and 3- or 6-byte frames don't divide [MAX_WRITE].
+     */
+    private val maxWrite: Int = (channelCount * (outputBits / 8)).coerceAtLeast(1).let { frame -> (MAX_WRITE / frame) * frame }
+
     override fun write(buffer: ByteBuffer): Int {
-        val count = call { UsbDirectNative.write(handle, buffer, buffer.position(), minOf(buffer.remaining(), MAX_WRITE)) }
+        val count = call { UsbDirectNative.write(handle, buffer, buffer.position(), minOf(buffer.remaining(), maxWrite)) }
         buffer.position(buffer.position() + count)
         return count
     }
