@@ -117,6 +117,15 @@ class CrossfadeController(
 
         override fun onPlayerError(error: PlaybackException) = bail()
 
+        // The queue was edited before the handoff (Play next, a move, a removal, a
+        // shuffle): the standby holds the old queue, so the edit would be undone or
+        // garbled at the handoff. Let this transition go; the next one copies afresh.
+        override fun onTimelineChanged(timeline: androidx.media3.common.Timeline, reason: Int) {
+            if (reason == Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED && !handedOff &&
+                (phase == Phase.ARMING || phase == Phase.FADING)
+            ) bail()
+        }
+
         // The held player reached its track end before the handoff: hand off now,
         // or, with nothing to hand to, let it carry on into the next track.
         override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
@@ -165,7 +174,8 @@ class CrossfadeController(
                 tick()
                 delay(
                     when (phase) {
-                        Phase.IDLE -> IDLE_STEP_MS
+                        // Nothing to watch for with crossfade off: look in far less often.
+                        Phase.IDLE -> if (configuredFadeMs() > 0L) IDLE_STEP_MS else OFF_STEP_MS
                         Phase.ARMING -> ARM_STEP_MS
                         Phase.FADING, Phase.SLEEP_FADE -> FADE_STEP_MS
                         Phase.BAILING -> BAIL_STEP_MS
@@ -192,6 +202,15 @@ class CrossfadeController(
     private fun tick() {
         // One rule covers focus loss, the sleep timer and the pause button: the
         // other player follows the one the session is on.
+        if (phase == Phase.ARMING || phase == Phase.FADING) {
+            val owner = if (handedOff) incoming else outgoing
+            // Only the session's player holds audio focus, so a call or a navigation
+            // prompt silences only it; the other would play on through it. A stop on
+            // the outgoing player, or "after this song" set mid-fade, ends it too.
+            if (owner != null && owner.playbackSuppressionReason != Player.PLAYBACK_SUPPRESSION_REASON_NONE) return bail()
+            if (!handedOff && outgoing?.playbackState == Player.STATE_IDLE) return bail()
+            if (!handedOff && SleepTimer.afterTrack.value) return bail()
+        }
         if (phase == Phase.FADING || phase == Phase.BAILING) {
             if (handedOff) {
                 outgoing?.playWhenReady = incoming?.playWhenReady ?: true
@@ -334,6 +353,9 @@ class CrossfadeController(
         if (handedOff) return
         reconcileQueue(out, into)
         Log.d(TAG, "handoff at in=${into.currentPosition}ms out=${out.currentPosition}ms")
+        // Repeat and shuffle may have changed since the standby was armed.
+        into.repeatMode = out.repeatMode
+        into.shuffleModeEnabled = out.shuffleModeEnabled
         listenTo(into)
         handedOff = true
         onHandoff(out, into)
@@ -485,7 +507,9 @@ class CrossfadeController(
 
     private fun stillWorthFading(): Boolean {
         val stillOn = configuredFadeMs() > 0L
-        return stillOn && (outgoing ?: active()).hasNextMediaItem()
+        val out = outgoing ?: active()
+        // Repeat-one turned on while armed: never fade a track into the next one then.
+        return stillOn && out.repeatMode != Player.REPEAT_MODE_ONE && out.hasNextMediaItem()
     }
 
     /** A player off duty: empty, unheld and at full volume, ready to be the next standby. */
@@ -529,6 +553,7 @@ class CrossfadeController(
         const val HANDOFF_AT = 0.5f
         const val HANDOFF_GUARD_MS = 400L
         const val IDLE_STEP_MS = 250L
+        const val OFF_STEP_MS = 1_000L
         const val ARM_STEP_MS = 40L
         const val FADE_STEP_MS = 30L
         const val HALF_TICK_NANOS = FADE_STEP_MS * 500_000L

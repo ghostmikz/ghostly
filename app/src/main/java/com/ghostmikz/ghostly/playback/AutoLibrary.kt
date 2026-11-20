@@ -16,6 +16,7 @@ import com.ghostmikz.ghostly.data.MusicRepository
 import com.ghostmikz.ghostly.data.Playlists
 import com.ghostmikz.ghostly.data.Prefs
 import com.ghostmikz.ghostly.data.Song
+import com.ghostmikz.ghostly.data.sortedForLibrary
 import com.ghostmikz.ghostly.ui.toMediaItem
 import java.util.Locale
 
@@ -76,10 +77,11 @@ internal class AutoLibrary(private val context: Context) {
             MEDIA_PLAYLISTS_ID -> {
                 val lib = library()
                 val own = Playlists.playlists.value.filterNot { it.isLiked }
+                val byId = lib.songs.associateBy { it.id }
                 if (own.isNotEmpty()) {
                     own.map { p ->
-                        val count = p.songIds.count { id -> lib.songs.any { it.id == id } }
-                        val cover = p.songIds.firstNotNullOfOrNull { id -> lib.songs.firstOrNull { it.id == id } }
+                        val count = p.songIds.count { it in byId }
+                        val cover = p.songIds.firstNotNullOfOrNull { byId[it] }
                         gridPlaylist("playlist:${p.id}", p.title, if (count == 1) "1 song" else "$count songs", cover)
                     }
                 } else {
@@ -127,6 +129,9 @@ internal class AutoLibrary(private val context: Context) {
      * a voice query plays what it matches.
      */
     suspend fun resolve(mediaItems: List<MediaItem>, startIndex: Int): Pair<List<MediaItem>, Int> {
+        // The app's own requests already carry their files and queue tags: handed
+        // back untouched (the same list), so shuffle and its saved order survive.
+        if (mediaItems.isNotEmpty() && mediaItems.all { it.localConfiguration != null }) return mediaItems to startIndex
         if (mediaItems.size == 1) {
             val item = mediaItems[0]
             val query = item.requestMetadata.searchQuery
@@ -155,7 +160,21 @@ internal class AutoLibrary(private val context: Context) {
                 else -> item(item.mediaId)?.takeIf { it.localConfiguration != null }
             }
         }
-        return (if (resolved.isEmpty()) mediaItems else resolved.asQueue()) to startIndex.coerceIn(0, (resolved.size - 1).coerceAtLeast(0))
+        if (resolved.isNotEmpty()) return resolved.asQueue() to startIndex.coerceIn(0, resolved.size - 1)
+        // Nothing matched ("play Ghostly", an unknown title, a song since deleted):
+        // never hand the player an item without a file, which it can't play and
+        // would crash on. Play the library instead, as a music app asked to "play" does.
+        val all = library().songs.sortedForLibrary(Prefs.localSort.value)
+        return all.map { it.toMediaItem() }.asQueue() to 0
+    }
+
+    /**
+     * One item added to an existing queue: a row adds just its song (not its
+     * folder), and an item that already has its file is kept as it is.
+     */
+    suspend fun resolveOne(item: MediaItem): MediaItem? = when {
+        item.localConfiguration != null -> item
+        else -> item(item.mediaId)?.takeIf { it.localConfiguration != null }?.asQueueEntry(QueueTier.CONTEXT)
     }
 
     private fun List<MediaItem>.asQueue() = map { it.asQueueEntry(QueueTier.CONTEXT) }
@@ -170,7 +189,7 @@ internal class AutoLibrary(private val context: Context) {
                 History.stats.value.entries.sortedByDescending { it.value.lastPlayed }.mapNotNull { byId[it.key] }.take(MAX_FOLDER_SONGS)
             folderId == MEDIA_LIKED_ID ->
                 Playlists.get(Playlists.LIKED_ID)?.songIds.orEmpty().mapNotNull { byId[it] }
-            folderId == MEDIA_LOCAL_MUSIC_ID -> lib.songs
+            folderId == MEDIA_LOCAL_MUSIC_ID -> lib.songs.sortedForLibrary(Prefs.localSort.value)
             folderId.startsWith("playlist:") ->
                 Playlists.get(folderId.removePrefix("playlist:"))?.songIds.orEmpty().mapNotNull { byId[it] }
             else -> emptyList()
@@ -257,13 +276,17 @@ internal class AutoLibrary(private val context: Context) {
             putBoolean(EXTRA_CONTENT_STYLE_SUPPORTED_AX, true)
         }
 
+    /**
+     * One page of a folder. Android Auto's legacy browser asks for page 0 of size
+     * Int.MAX_VALUE and never for a second page, so no cap here: a cap would cut
+     * every long folder short (and, with real paging, skew the offsets).
+     */
     private fun <T> paginate(items: List<T>, page: Int, pageSize: Int): List<T> {
         if (page < 0 || pageSize <= 0 || items.isEmpty()) return emptyList()
-        val safePageSize = pageSize.coerceAtMost(MAX_AUTO_PAGE_SIZE)
-        val fromLong = page.toLong() * safePageSize.toLong()
+        val fromLong = page.toLong() * pageSize.toLong()
         if (fromLong >= items.size.toLong()) return emptyList()
         val from = fromLong.toInt()
-        val to = (fromLong + safePageSize).coerceAtMost(items.size.toLong()).toInt()
+        val to = (fromLong + pageSize).coerceAtMost(items.size.toLong()).toInt()
         return items.subList(from, to)
     }
 
@@ -277,7 +300,6 @@ internal class AutoLibrary(private val context: Context) {
         const val MEDIA_LOCAL_MUSIC_ID = "local_music"
         private const val ROW_SEPARATOR = "|"
         private const val SEARCH_FOLDER = "search:"
-        const val MAX_AUTO_PAGE_SIZE = 50
         private const val MAX_FOLDER_SONGS = 100
         private const val MAX_SEARCH_RESULTS = 50
         private const val MAX_SEARCH_QUERY_CHARS = 100

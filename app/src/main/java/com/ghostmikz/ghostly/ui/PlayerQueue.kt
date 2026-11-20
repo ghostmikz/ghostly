@@ -4,6 +4,9 @@
 // BitChord's.
 package com.ghostmikz.ghostly.ui
 
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -196,10 +199,18 @@ internal fun splitQueue(
 
     val user = ArrayList<QueueTrack>()
     val context = ArrayList<QueueTrack>()
+    // "Next in queue" is the unbroken run of hand-queued rows straight after the
+    // current track; anything after the first context row is listed in play order
+    // with the context (going back to an earlier song leaves a run of queued songs
+    // behind context rows, and the panel must show what will actually play next).
+    var inUserRun = true
     for (index in currentIndex + 1 until queue.size) {
-        when (tiers.getOrNull(index)) {
-            QueueTier.USER_QUEUE -> user += track(index, "user")
-            else -> context += track(index, "context")
+        val isUser = tiers.getOrNull(index) == QueueTier.USER_QUEUE
+        if (inUserRun && isUser) {
+            user += track(index, "user")
+        } else {
+            inUserRun = false
+            context += track(index, "context")
         }
     }
     val history = if (showHistory) (0 until currentIndex).map { track(it, "history") } else emptyList()
@@ -387,6 +398,9 @@ private fun LazyListScope.queueSection(
             onRemove = { onRemove(track.timelineIndex) },
             locked = locked,
             draggable = !locked,
+            // Without a drag: TalkBack / switch access move a row one place within its section.
+            onMoveUp = rows.getOrNull(rows.indexOf(track) - 1)?.let { prev -> { drag.onMove(track.timelineIndex, prev.timelineIndex) } },
+            onMoveDown = rows.getOrNull(rows.indexOf(track) + 1)?.let { next -> { drag.onMove(track.timelineIndex, next.timelineIndex) } },
             onDragStart = { drag.start(track.key, section) },
             onDrag = drag::drag,
             onDragEnd = { drag.end(track.key) },
@@ -521,6 +535,12 @@ private fun rememberQueueDrag(
  */
 private class QueueDrag(private val listState: LazyListState) {
     var tracks = QueueTracks.EMPTY
+        set(value) {
+            // The queue changed under the drag (a track change, a handoff): the slot a
+            // sent swap was to land at may never appear, so stop waiting for it.
+            if (value !== field) awaiting = null
+            field = value
+        }
     var onMove: (Int, Int) -> Unit = { _, _ -> }
 
     var onActiveChange: (Boolean) -> Unit = {}
@@ -670,6 +690,8 @@ private fun InlineQueueRow(
     onDragStart: () -> Unit = {},
     onDrag: (Float) -> Unit = {},
     onDragEnd: () -> Unit = {},
+    onMoveUp: (() -> Unit)? = null,
+    onMoveDown: (() -> Unit)? = null,
 ) {
     Row(
         modifier = modifier
@@ -689,6 +711,12 @@ private fun InlineQueueRow(
                 tint = Color.White.copy(alpha = 0.4f),
                 modifier = Modifier
                     .size(20.dp)
+                    .semantics {
+                        customActions = listOfNotNull(
+                            onMoveUp?.let { m -> CustomAccessibilityAction("Move up") { m(); true } },
+                            onMoveDown?.let { m -> CustomAccessibilityAction("Move down") { m(); true } },
+                        )
+                    }
                     // The glyph sits well inset in its own box; this pulls it
                     // back to the row's edge.
                     .offset(x = (-4).dp)

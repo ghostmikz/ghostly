@@ -1,6 +1,9 @@
 // Ported from BitChord's ReorderPlaylistPage (https://github.com/kushagrasinghx/BitChord, GPLv3).
 package com.ghostmikz.ghostly.ui
 
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -72,7 +75,18 @@ fun ReorderPlaylistPage(
     contentPadding: PaddingValues = PaddingValues(),
 ) {
     BackHandler(onBack = onClose)
-    val order = remember(songs) { mutableStateListOf<Song>().apply { addAll(songs) } }
+    // Kept across rotation and recreation as ids, and rebuilt from whichever song
+    // list is current, so a reload of the library doesn't throw the edit away.
+    var orderIds by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(songs.map { it.id }) }
+    val order = remember(songs) {
+        val byId = songs.associateBy { it.id }
+        val kept = orderIds.mapNotNull { byId[it] }
+        val added = songs.filterNot { s -> s.id in orderIds }
+        mutableStateListOf<Song>().apply { addAll(kept + added) }
+    }
+    LaunchedEffect(order) {
+        androidx.compose.runtime.snapshotFlow { order.map { it.id } }.collect { orderIds = it }
+    }
     val changed = order.map { it.id } != songs.map { it.id }
     Column(modifier.fillMaxSize()) {
         TopBarSpace()
@@ -200,9 +214,14 @@ private fun ReorderableSongList(
     }
 
     LazyColumn(state = listState, modifier = Modifier.fillMaxSize(), contentPadding = contentPadding) {
-        itemsIndexed(order, key = { _, song -> song.id.toString() }) { _, song ->
+        itemsIndexed(order, key = { _, song -> song.id.toString() }) { index, song ->
             val key = song.id.toString()
             val dragging = held == key
+            if (dragging) {
+                // Scrolled off while held, the row takes its gesture with it and no
+                // end callback runs: end the drag here (as the queue's rows do).
+                androidx.compose.runtime.DisposableEffect(Unit) { onDispose { end() } }
+            }
             val start: () -> Unit = {
                 held = key
                 offset = 0f
@@ -218,6 +237,8 @@ private fun ReorderableSongList(
                 onDragStart = start,
                 onDrag = drag,
                 onDragEnd = ::end,
+                onMoveUp = if (index > 0) ({ order.add(index - 1, order.removeAt(index)) }) else null,
+                onMoveDown = if (index < order.lastIndex) ({ order.add(index + 1, order.removeAt(index)) }) else null,
                 modifier = Modifier
                     .zIndex(if (dragging) 1f else 0f)
                     .graphicsLayer { translationY = if (dragging) offset else 0f }
@@ -237,6 +258,9 @@ private fun ReorderRow(
     onDrag: (Float) -> Unit,
     onDragEnd: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Without a drag: TalkBack / switch access move the song one place. */
+    onMoveUp: (() -> Unit)? = null,
+    onMoveDown: (() -> Unit)? = null,
 ) {
     // Holding anywhere on the row picks it up too, not only the handle — the
     // handle is a small target, and a long press is what lists elsewhere on
@@ -286,6 +310,12 @@ private fun ReorderRow(
             tint = GhostlyColors.TextSecondary,
             modifier = Modifier
                 .size(48.dp)
+                .semantics {
+                    customActions = listOfNotNull(
+                        onMoveUp?.let { m -> CustomAccessibilityAction("Move up") { m(); true } },
+                        onMoveDown?.let { m -> CustomAccessibilityAction("Move down") { m(); true } },
+                    )
+                }
                 .padding(12.dp)
                 .pointerInput(enabled) {
                     if (!enabled) return@pointerInput

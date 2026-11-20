@@ -100,8 +100,12 @@ object Playlists {
         list.map { p ->
             if (p.id != id) p
             else {
+                // The shown songs take the slots shown songs held, in their new order;
+                // a song that isn't on the phone stays in its own slot.
                 val shown = songIds.toHashSet()
-                p.copy(songIds = songIds.filter { it in p.songIds } + p.songIds.filterNot { it in shown })
+                val inPlaylist = p.songIds.toHashSet()
+                val next = songIds.filter { it in inPlaylist }.iterator()
+                p.copy(songIds = p.songIds.map { id -> if (id in shown && next.hasNext()) next.next() else id }.distinct())
             }
         }
     }

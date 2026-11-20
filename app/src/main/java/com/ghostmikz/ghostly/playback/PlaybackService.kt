@@ -112,6 +112,10 @@ class PlaybackService : MediaLibraryService() {
             }
 
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                // The crossfade holds the outgoing track at its end; that is not a pause.
+                if (!playWhenReady && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_END_OF_MEDIA_ITEM &&
+                    crossfade?.isTransitioning() == true
+                ) return
                 publishWidgetState(playing = playWhenReady)
                 if (!playWhenReady) QueueStore.save(this@PlaybackService, player)
             }
@@ -218,6 +222,8 @@ class PlaybackService : MediaLibraryService() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val fader = CrossfadeController(scope, { player }, { spare }, ::adoptPlayer).also { it.start() }
+        // A shuffle toggled as the next track becomes imminent keeps that track in place.
+        QueueShuffle.isCrossfadeTransitioning = fader::isTransitioning
         crossfade = fader
         session = MediaLibrarySession.Builder(this, SessionPlayer(player, fader), LibraryCallback())
             .setSessionActivity(openApp)
@@ -269,6 +275,15 @@ class PlaybackService : MediaLibraryService() {
      * progress — a manual skip never crossfades (BitChord's SessionPlayer).
      */
     private class SessionPlayer(player: Player, private val crossfade: CrossfadeController) : ForwardingPlayer(player) {
+        // Shuffle is a queue edit (BitChord's QueueShuffle), never the player's own
+        // hidden order: a car, Bluetooth or the notification asking for shuffle
+        // gets the same toggle as the app's button.
+        override fun setShuffleModeEnabled(shuffleModeEnabled: Boolean) {
+            if (shuffleModeEnabled != QueueShuffle.enabled.value) QueueShuffle.toggle(this)
+        }
+
+        override fun getShuffleModeEnabled(): Boolean = QueueShuffle.enabled.value
+
         override fun seekTo(mediaItemIndex: Int, positionMs: Long) {
             crossfade.onSkipRequested()
             super.seekTo(mediaItemIndex, positionMs)
@@ -409,9 +424,9 @@ class PlaybackService : MediaLibraryService() {
             controller: MediaSession.ControllerInfo,
             mediaItems: List<MediaItem>,
         ): ListenableFuture<List<MediaItem>> = scope.future(Dispatchers.IO) {
-            // The app's own adds already carry their file; only a browser's need resolving.
-            if (mediaItems.all { it.localConfiguration != null }) mediaItems
-            else mediaItems.flatMap { autoLibrary.resolve(listOf(it), 0).first }
+            // Item by item: the app's own adds (which carry their file and queue tag)
+            // stay as they are; a browser's row adds just its song.
+            mediaItems.mapNotNull { autoLibrary.resolveOne(it) }
         }
     }
 

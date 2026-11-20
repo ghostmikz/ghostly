@@ -112,9 +112,8 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         val c = controller ?: return
         if (songs.isEmpty()) return
         this.from = from
-        // BitChord: the player's own shuffle is never used. Shuffle is the queue
-        // itself rearranged, so what the queue shows is what plays, in order.
-        c.shuffleModeEnabled = false
+        // BitChord: the player's own shuffle is never used (the session refuses it).
+        // Shuffle is the queue itself rearranged, so what the queue shows is what plays.
         val items = songs.map { it.toMediaItem().asQueueEntry(QueueTier.CONTEXT) }
         QueueShuffle.clearCanonicalContext()
         if (shuffle) {
