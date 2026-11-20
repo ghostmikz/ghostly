@@ -14,7 +14,6 @@
 
 <p align="center">
   <a href="https://github.com/ghostmikz/ghostly/releases/latest"><img src="docs/readme/get-it-on-github.png" height="72" alt="Get it on GitHub"></a>
-  <a href="https://apps.obtainium.imranr.dev/redirect?r=obtainium://add/https://github.com/ghostmikz/ghostly"><img src="docs/readme/get-it-on-obtainium.png" height="72" alt="Get it on Obtainium"></a>
 </p>
 
 <p align="center">
