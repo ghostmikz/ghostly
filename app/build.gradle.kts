@@ -31,13 +31,27 @@ android {
         buildConfigField("String", "LASTFM_SECRET", "\"${prop("LASTFM_SECRET")}\"")
     }
 
+    // The release key lives outside the repo; its path and passwords come from
+    // local.properties (or the environment). Without them, release builds fall
+    // back to the debug key so anyone can still build and install.
+    val releaseStore = localProps.getProperty("RELEASE_STORE_FILE") ?: System.getenv("RELEASE_STORE_FILE")
+    signingConfigs {
+        if (releaseStore != null && file(releaseStore).exists()) {
+            create("release") {
+                storeFile = file(releaseStore)
+                storePassword = localProps.getProperty("RELEASE_STORE_PASSWORD") ?: System.getenv("RELEASE_STORE_PASSWORD")
+                keyAlias = localProps.getProperty("RELEASE_KEY_ALIAS") ?: System.getenv("RELEASE_KEY_ALIAS")
+                keyPassword = localProps.getProperty("RELEASE_KEY_PASSWORD") ?: System.getenv("RELEASE_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // Signed with the debug key so the release APK installs without a keystore setup.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
     }
     compileOptions {
