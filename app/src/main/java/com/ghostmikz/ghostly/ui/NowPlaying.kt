@@ -1,5 +1,8 @@
 package com.ghostmikz.ghostly.ui
 
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.Crossfade
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
@@ -129,8 +132,10 @@ fun NowPlayingScreen(
     var showMenu by remember { mutableStateOf(false) }
     var showSleep by remember { mutableStateOf(false) }
     // Apple-style: the cover sits a bit smaller while paused.
+    // BitChord's artScale: down to 86% on a low, slow spring.
     val coverScale by animateFloatAsState(
-        if (state.isPlaying || reduceAnim) 1f else 0.84f, spring(dampingRatio = 0.6f, stiffness = 300f), label = "cover",
+        if (state.isPlaying || reduceAnim) 1f else 0.86f,
+        spring(dampingRatio = Spring.DampingRatioLowBouncy, stiffness = Spring.StiffnessLow), label = "cover",
     )
     // "Hide status bar in player"
     val view = LocalView.current
@@ -200,15 +205,23 @@ fun NowPlayingScreen(
         val credits: @Composable () -> Unit = {
             // title, artist, star, more
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(song?.title ?: "", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold,
-                        letterSpacing = (-0.4).sp, maxLines = 1, modifier = Modifier.basicMarquee())
-                    Text(song?.artist ?: "", color = Dim, fontSize = 24.sp, letterSpacing = (-0.4).sp,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.clickable { song?.let { onClose(); actions.openArtist(it.artist) } })
+                // BitChord's playerCredits: the title and artist fade into the next track's.
+                Crossfade(
+                    targetState = (song?.title ?: "") to (song?.artist ?: ""),
+                    animationSpec = tween(durationMillis = 300),
+                    modifier = Modifier.weight(1f),
+                    label = "playerCredits",
+                ) { (title, artist) ->
+                    Column {
+                        Text(title, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold,
+                            letterSpacing = (-0.4).sp, maxLines = 1, modifier = Modifier.basicMarquee())
+                        Text(artist, color = Dim, fontSize = 24.sp, letterSpacing = (-0.4).sp,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.clickable { if (artist.isNotEmpty()) { onClose(); actions.openArtist(artist) } })
+                    }
                 }
                 val fav = song != null && song.id in favs
-                RoundGlassButton(if (fav) BitChordIcons.StarFilled else BitChordIcons.Star, if (fav) "Remove from Liked" else "Like") {
+                RoundGlassButton(if (fav) BitChordIcons.StarFilled else BitChordIcons.Star, if (fav) "Remove from Liked" else "Like", active = fav) {
                     song?.let { History.toggleFavorite(it.id) }
                 }
                 Spacer(Modifier.width(12.dp))
@@ -247,9 +260,12 @@ fun NowPlayingScreen(
                 Modifier.fillMaxWidth().padding(vertical = if (compact) 6.dp else 22.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically,
             ) {
-                Transport(R.drawable.ic_player_previous, "Previous", if (compact) 44.dp else 54.dp) { vm.previous() }
+                // BitChord: Previous restarts the track past its first 3 seconds, so it
+                // only fades out at the very start of a queue's first track.
+                Transport(R.drawable.ic_player_previous, "Previous", if (compact) 44.dp else 54.dp,
+                    enabled = state.hasPrevious || state.positionMs > RESTART_POINT_MS) { vm.previous() }
                 Transport(if (state.isPlaying) R.drawable.ic_player_pause else R.drawable.ic_player_play, "Play or pause", if (compact) 58.dp else 72.dp) { vm.togglePlay() }
-                Transport(R.drawable.ic_player_next, "Next", if (compact) 44.dp else 54.dp) { vm.next() }
+                Transport(R.drawable.ic_player_next, "Next", if (compact) 44.dp else 54.dp, enabled = state.hasNext) { vm.next() }
             }
 
         }
@@ -342,27 +358,45 @@ private fun LibraryActions.copyClosing(close: () -> Unit) = copy(
     removeFromPlaylist = null,
 )
 
+/** Media3's default: Previous restarts the track rather than going back once past this. */
+private const val RESTART_POINT_MS = 3_000L
+
+/**
+ * BitChord's CircleGlyph: [active] brightens the disc rather than only the glyph,
+ * since a white icon on a white-ish cover has no tint change left to make, and
+ * the glyph crossfades when it changes (an empty star to a filled one).
+ */
 @Composable
-private fun RoundGlassButton(icon: ImageVector, description: String, onClick: () -> Unit) {
+private fun RoundGlassButton(icon: ImageVector, description: String, active: Boolean = false, onClick: () -> Unit) {
+    val discAlpha by animateFloatAsState(if (active) 0.34f else 0.18f, label = "glyphDisc")
     Box(
-        Modifier.size(46.dp).bounceClick(scaleDown = 0.88f, onClick = onClick).clip(CircleShape).background(Color.White.copy(alpha = 0.12f)),
+        Modifier.size(46.dp).bounceClick(scaleDown = 0.88f, onClick = onClick).clip(CircleShape)
+            .drawBehind { drawRect(Color.White.copy(alpha = discAlpha)) },
         contentAlignment = Alignment.Center,
-    ) { Icon(icon, description, tint = Color.White, modifier = Modifier.size(22.dp)) }
+    ) {
+        Crossfade(targetState = icon, animationSpec = tween(durationMillis = 180), label = "playerMenuGlyph") { glyph ->
+            Icon(glyph, description, tint = Color.White, modifier = Modifier.size(22.dp))
+        }
+    }
 }
 
 @Composable
-private fun Transport(icon: Int, description: String, size: Dp, onClick: () -> Unit) {
+private fun Transport(icon: Int, description: String, size: Dp, enabled: Boolean = true, onClick: () -> Unit) {
     var pressed by remember { mutableStateOf(false) }
     val motion = motionOn()
     val tick = rememberTick()
     val scale by animateFloatAsState(if (pressed && motion) 0.82f else 1f, spring(dampingRatio = 0.5f, stiffness = 600f), label = "press")
+    // BitChord's transportAlpha: faded rather than hidden, so the row keeps its
+    // shape at the ends of a queue.
+    val alpha by animateFloatAsState(if (enabled) 1f else 0.3f, label = "transportAlpha")
     Icon(
-        painterResource(icon), description, tint = Color.White,
+        painterResource(icon), description, tint = Color.White.copy(alpha = alpha),
         modifier = Modifier.size(size).scale(scale)
-            .semantics { role = Role.Button; onClick { onClick(); true } }
-            .pointerInput(onClick) {
-            detectTapGestures(onPress = { pressed = true; tryAwaitRelease(); pressed = false }, onTap = { tick(); onClick() })
-        },
+            .semantics { role = Role.Button; if (!enabled) disabled(); onClick { onClick(); true } }
+            .pointerInput(onClick, enabled) {
+                if (!enabled) return@pointerInput
+                detectTapGestures(onPress = { pressed = true; tryAwaitRelease(); pressed = false }, onTap = { tick(); onClick() })
+            },
     )
 }
 

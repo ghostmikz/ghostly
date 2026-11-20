@@ -39,6 +39,9 @@ data class PlayerState(
     val queueEntryIds: List<String?> = emptyList(),
     val queueIndex: Int = 0,
     val from: String = "",
+    /** Whether Next / Previous have a track to go to (repeat-all included). */
+    val hasNext: Boolean = false,
+    val hasPrevious: Boolean = false,
 )
 
 class PlayerViewModel(app: Application) : AndroidViewModel(app) {
@@ -105,6 +108,8 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             queueEntryIds = items.map { it.queueEntryId },
             queueIndex = order.indexOf(c.currentMediaItemIndex),
             from = from,
+            hasNext = c.hasNextMediaItem(),
+            hasPrevious = c.hasPreviousMediaItem(),
         )
     }
 

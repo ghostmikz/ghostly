@@ -74,6 +74,8 @@ object ArtCache {
     fun clear() {
         cache.evictAll()
         synchronized(missing) { missing.clear() }
+        // The colours worked out from those covers go with them.
+        ArtworkColorCache.clear()
     }
 
     // By album where there is one (one cover, many songs); by song where there

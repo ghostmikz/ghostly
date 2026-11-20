@@ -137,6 +137,10 @@ private val audioPermission =
 class MainActivity : ComponentActivity() {
     private val vm: PlayerViewModel by viewModels()
 
+    // Volume keys move the DAC's own volume while direct USB output owns it (BitChord).
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean =
+        handleDacVolumeKey(event) || super.dispatchKeyEvent(event)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
@@ -391,23 +395,16 @@ private fun Main(vm: PlayerViewModel) {
             },
         )
 
-        // ---- pages: slide in when opened, slide back when closed, fade between tabs ----
+        // ---- pages (BitChord): a tab switch is instant; opening or closing a page is a short fade ----
         AnimatedContent(
             targetState = page,
             modifier = Modifier.fillMaxSize()
                 .then(if (record) Modifier.layerBackdrop(appBackdrop) else Modifier)
                 .statusBarsPadding().nestedScroll(scrollWatch),
             transitionSpec = {
-                when {
-                    !motion -> EnterTransition.None togetherWith ExitTransition.None
-                    targetState.depth > initialState.depth ->
-                        (slideInHorizontally(tween(320)) { it / 3 } + fadeIn(tween(220))) togetherWith
-                            (slideOutHorizontally(tween(320)) { -it / 8 } + fadeOut(tween(200)))
-                    targetState.depth < initialState.depth ->
-                        (slideInHorizontally(tween(320)) { -it / 8 } + fadeIn(tween(220))) togetherWith
-                            (slideOutHorizontally(tween(320)) { it / 3 } + fadeOut(tween(200)))
-                    else -> fadeIn(tween(220)) togetherWith fadeOut(tween(140))
-                }
+                val tabSwap = targetState.depth == 0 && initialState.depth == 0
+                if (!motion || tabSwap) EnterTransition.None togetherWith ExitTransition.None
+                else fadeIn(tween(180)) togetherWith fadeOut(tween(180))
             },
             label = "pages",
         ) { p ->
@@ -481,11 +478,16 @@ private fun Main(vm: PlayerViewModel) {
             if (stack.lastOrNull() != Screen.Settings) TopCircle(Icons.Rounded.Settings, "Settings") { stack += Screen.Settings }
         }
 
-        // Fade the content out under the floating bars.
-        Box(
-            Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(bottomPad)
-                .background(Brush.verticalGradient(listOf(Color.Transparent, GhostlyColors.Background.copy(alpha = 0.8f)))),
-        )
+        // Fade the content out under the floating bars (BitChord's BottomFadeScrim).
+        BottomFadeScrim(Modifier.align(Alignment.BottomCenter), withMiniPlayer = state.current != null, inset = navBar)
+
+        // "Song will play next" and the like, just above the mini player (BitChord).
+        QueueNoticeHost(Modifier.align(Alignment.BottomCenter).padding(bottom = bottomPad - 24.dp + 4.dp))
+
+        // The DAC's own volume beside the volume keys while direct USB owns it
+        // (BitChord); not over the full player, whose own bar already shows it.
+        LaunchedEffect(Unit) { snapshotFlow { sheet.value < 1f }.collect { VolumeHud.suppressed = it } }
+        DacVolumeHud()
 
         // ---- floating bars: the full tab bar with the mini player above it, or (while scrolling down)
         // a small tab bubble with the mini player beside it. The two layouts morph into each other. ----

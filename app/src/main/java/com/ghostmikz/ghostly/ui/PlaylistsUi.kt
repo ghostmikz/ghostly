@@ -167,7 +167,7 @@ fun PlaylistPickerSheet(song: Song?, library: Library, onDismiss: () -> Unit) {
             scope.launch { sheetState.hide() }.invokeOnCompletion { onDismiss() }
         }
     }
-    fun notice(text: String) = Toast.makeText(context, text, Toast.LENGTH_SHORT).show()
+    fun notice(text: String) = QueueNotice.show(text)
 
     ModalBottomSheet(
         onDismissRequest = onDismiss, sheetState = sheetState, shape = RectangleShape,

@@ -82,6 +82,9 @@ fun LibraryScreen(
     // BitChord's device-library sort; Play and Shuffle follow the order shown.
     val sort by Prefs.localSort.collectAsState()
     val songs = remember(library.songs, sort) { library.songs.sortedForLibrary(sort) }
+    // Held out here, above the per-tab lists, so the pill slides across a tab
+    // change instead of starting over in the new list.
+    val tabSlide = rememberSegmentSlide(tab)
     val header: @Composable () -> Unit = {
         Column {
             TopBarSpace()
@@ -96,7 +99,7 @@ fun LibraryScreen(
                 onShuffle = { actions.play(songs, 0, true, "Library") },
             )
             Spacer(Modifier.height(18.dp))
-            SegmentedTabs(LIB_TABS, tab, { tab = it })
+            SegmentedTabs(LIB_TABS, tab, { tab = it }, slide = tabSlide)
             if (tab == 0) SortRow(sort, Prefs::setLocalSort) else Spacer(Modifier.height(8.dp))
         }
     }

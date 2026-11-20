@@ -188,16 +188,30 @@ private fun smootherStep(t: Float): Float {
 @Composable
 fun rememberArtworkColors(ref: String?): MeshPalette {
     val context = LocalContext.current
-    var palette by remember(ref) { mutableStateOf(MeshPalette(FallbackColors)) }
+    // Started from the colours already worked out for this cover, if any: a card
+    // built again (a Library tab switch, coming back from Home) would otherwise
+    // show the fallback for a moment before its own colours came back.
+    var palette by remember(ref) { mutableStateOf(ref?.let(ArtworkColorCache::get) ?: MeshPalette(FallbackColors)) }
 
     LaunchedEffect(ref) {
+        if (ref == null || ArtworkColorCache.get(ref) != null) return@LaunchedEffect
         val song = artSong(ref) ?: return@LaunchedEffect
         // Palette quality is fine at thumbnail size, and it's fast.
         val art = ArtCache.load(context, song, 128) ?: return@LaunchedEffect
         val bitmap = if (art.config == Bitmap.Config.HARDWARE) art.copy(Bitmap.Config.ARGB_8888, false) else art
-        palette = MeshPalette(withContext(Dispatchers.Default) { paletteOf(bitmap) })
+        val found = MeshPalette(withContext(Dispatchers.Default) { paletteOf(bitmap) })
+        ArtworkColorCache.put(ref, found)
+        palette = found
     }
     return palette
+}
+
+/** Covers' mesh colours, once worked out, for as long as the app runs. Small: a few colours each. */
+internal object ArtworkColorCache {
+    private val cache = android.util.LruCache<String, MeshPalette>(64)
+    fun get(ref: String): MeshPalette? = cache.get(ref)
+    fun put(ref: String, palette: MeshPalette) { cache.put(ref, palette) }
+    fun clear() = cache.evictAll()
 }
 
 /** [this] with every colour turned [degrees] around the wheel, tone untouched. */

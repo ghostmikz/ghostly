@@ -1,5 +1,20 @@
 package com.ghostmikz.ghostly.ui
 
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.draw.shadow
+import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.animation.togetherWith
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.collectAsState
+import androidx.compose.ui.layout.layout
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.runtime.CompositionLocalProvider
@@ -97,35 +112,81 @@ fun PlayShuffleButtons(onPlay: () -> Unit, onShuffle: () -> Unit, modifier: Modi
     }
 }
 
-/** Pill-shaped segmented tabs (Songs / Artists / Albums / Folders). */
+/**
+ * Pill-shaped segmented tabs (Songs / Artists / Albums / Folders, and Settings'
+ * two- and three-way choices). The selected segment is a pill that slides
+ * between the others, as BitChord's PillSegmentedControl.
+ */
 @Composable
 fun SegmentedTabs(
     labels: List<String>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier,
     container: Color = GhostlyColors.Card,
+    /**
+     * The pill's position from [rememberSegmentSlide], for tabs that are rebuilt
+     * when the selection changes (the Library's, which sit inside each tab's own
+     * list): kept outside, the slide survives the rebuild.
+     */
+    slide: androidx.compose.runtime.State<Float>? = null,
 ) {
-    Row(
+    if (labels.isEmpty()) return
+    val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
+    val own = rememberSegmentSlide(selected)
+    val pill = slide ?: own
+    androidx.compose.foundation.layout.BoxWithConstraints(
         modifier.fillMaxWidth().padding(horizontal = 16.dp).height(42.dp).clip(CircleShape)
             .background(container).padding(4.dp),
     ) {
-        labels.forEachIndexed { i, label ->
-            val bg by animateColorAsState(if (i == selected) GhostlyColors.Selected else Color.Transparent, label = "seg")
-            Box(
-                Modifier.weight(1f).fillMaxHeight().clip(CircleShape).background(bg).plainClick { onSelect(i) },
-                contentAlignment = Alignment.Center,
-            ) {
-                // Shrinks to fit rather than being cut off: five labels share a
-                // narrow phone's width, more so with large text.
-                androidx.compose.foundation.text.BasicText(
-                    label,
-                    style = androidx.compose.ui.text.TextStyle(color = GhostlyColors.Text, fontWeight = FontWeight.SemiBold),
-                    maxLines = 1,
-                    autoSize = androidx.compose.foundation.text.TextAutoSize.StepBased(minFontSize = 10.sp, maxFontSize = 14.sp),
-                    modifier = Modifier.padding(horizontal = 2.dp),
-                )
+        val segment = constraints.maxWidth.toFloat() / labels.size
+        Box(
+            Modifier
+                .matchParentSize()
+                // Read here rather than in composition, so the slide relays this
+                // box out and recomposes nothing.
+                .layout { measurable, c ->
+                    val placeable = measurable.measure(androidx.compose.ui.unit.Constraints.fixed(segment.roundToInt(), c.maxHeight))
+                    layout(c.maxWidth, c.maxHeight) { placeable.place((pill.value * segment).roundToInt(), 0) }
+                }
+                .clip(CircleShape)
+                .background(GhostlyColors.Selected),
+        )
+        Row(Modifier.fillMaxSize()) {
+            labels.forEachIndexed { i, label ->
+                Box(
+                    Modifier.weight(1f).fillMaxHeight().clip(CircleShape).plainClick {
+                        if (i != selected) {
+                            haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                            onSelect(i)
+                        }
+                    },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    // Shrinks to fit rather than being cut off: five labels share a
+                    // narrow phone's width, more so with large text.
+                    androidx.compose.foundation.text.BasicText(
+                        label,
+                        style = androidx.compose.ui.text.TextStyle(color = GhostlyColors.Text, fontWeight = FontWeight.SemiBold),
+                        maxLines = 1,
+                        autoSize = androidx.compose.foundation.text.TextAutoSize.StepBased(minFontSize = 10.sp, maxFontSize = 14.sp),
+                        modifier = Modifier.padding(horizontal = 2.dp),
+                    )
+                }
             }
         }
     }
 }
+
+/** Where the selected pill of [SegmentedTabs] is, sliding on BitChord's spring (or snapping with Reduce animation). */
+@Composable
+fun rememberSegmentSlide(selected: Int): androidx.compose.runtime.State<Float> {
+    val reduceAnimation by com.ghostmikz.ghostly.data.Prefs.reduceAnimation.state.collectAsState()
+    val motion: androidx.compose.animation.core.AnimationSpec<Float> =
+        if (reduceAnimation) androidx.compose.animation.core.snap()
+        else androidx.compose.animation.core.spring(PILL_DAMPING, androidx.compose.animation.core.Spring.StiffnessMediumLow)
+    return androidx.compose.animation.core.animateFloatAsState(selected.coerceAtLeast(0).toFloat(), motion, label = "segmentStart")
+}
+
+/** BitChord's pill spring: a little give, no wobble. */
+private const val PILL_DAMPING = 0.8f
 
 // ---------- titles ----------
 
@@ -163,7 +224,7 @@ fun SongRow(
     val state = rememberSwipeToDismissBoxState(confirmValueChange = { v ->
         if (v == SwipeToDismissBoxValue.StartToEnd) {
             onPlayNext()
-            android.widget.Toast.makeText(context, "Playing next: ${song.title}", android.widget.Toast.LENGTH_SHORT).show()
+            QueueNotice.show("Song will play next")
         }
         false
     })
@@ -188,8 +249,15 @@ private fun SongRowContent(
     trackNumber: Int?,
 ) {
     var open by remember { mutableStateOf(false) }
+    // BitChord's album rows: the playing one fades to the accent, with a faint
+    // wash of it behind. Its library lists leave the playing row plain, as here.
+    val tinted = trackNumber != null && playing
+    val titleColor by animateColorAsState(if (tinted) GhostlyColors.Accent else GhostlyColors.Text, label = "song row title")
+    val rowBackground by animateColorAsState(
+        if (tinted) GhostlyColors.Accent.copy(alpha = 0.14f) else Color.Transparent, label = "song row background",
+    )
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(start = 16.dp),
+        Modifier.fillMaxWidth().drawBehind { drawRect(rowBackground) }.clickable(onClick = onClick).padding(start = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (trackNumber != null) {
@@ -210,7 +278,7 @@ private fun SongRowContent(
         Column(Modifier.weight(1f).padding(start = 14.dp)) {
             Row(Modifier.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text(song.title, color = GhostlyColors.Text, fontSize = 17.sp, fontWeight = FontWeight.Medium,
+                    Text(song.title, color = titleColor, fontSize = 17.sp, fontWeight = FontWeight.Medium,
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(song.artist, color = GhostlyColors.TextSecondary, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
@@ -516,7 +584,7 @@ fun SongMenuItems(song: Song, actions: LibraryActions, onDismiss: () -> Unit) {
         leadingIcon = { Icon(icon, null, tint = GhostlyColors.Text, modifier = Modifier.size(20.dp)) },
         onClick = { onDismiss(); run() },
     )
-    item("Play next", BitChordIcons.Queue) { actions.playNext(song) }
+    item("Play next", BitChordIcons.Queue) { actions.playNext(song); QueueNotice.show("Song will play next") }
     item("Add to playlist", BitChordIcons.Plus) { actions.addToPlaylist(song) }
     actions.removeFromPlaylist?.let { remove -> item("Remove from playlist", BitChordIcons.Library) { remove(song) } }
     item(if (fav) "Remove from Liked" else "Like", if (fav) BitChordIcons.StarFilled else BitChordIcons.Star) {
@@ -552,5 +620,189 @@ fun EqBars(modifier: Modifier = Modifier, color: Color = GhostlyColors.Text) {
                 Size(bar, h), CornerRadius(bar / 2, bar / 2),
             )
         }
+    }
+}
+
+// ---------- the floor under the floating bars ----------
+
+/** The strip the tab bar alone needs, above the gesture inset (BitChord). */
+private val FADE_HEIGHT = 180.dp
+
+/** Taller once the mini player is stacked on top of the tab bar. */
+private val FADE_HEIGHT_WITH_MINI_PLAYER = 254.dp
+
+/**
+ * How many colour stops the ramp is cut into: a two-stop gradient is the wrong
+ * curve, and across a strip this tall it bands visibly on an 8-bit display.
+ */
+private const val FADE_STOPS = 16
+
+/**
+ * BitChord's BottomFadeScrim: the page's own colour, faded in from nothing at
+ * the top to solid at the very bottom, under the floating bars. It grows with
+ * the mini player rather than snapping ahead of it.
+ */
+@Composable
+fun BottomFadeScrim(modifier: Modifier = Modifier, withMiniPlayer: Boolean, inset: androidx.compose.ui.unit.Dp) {
+    val height by androidx.compose.animation.core.animateDpAsState(
+        inset + if (withMiniPlayer) FADE_HEIGHT_WITH_MINI_PLAYER else FADE_HEIGHT,
+        // Matches the beat the mini player takes to appear.
+        androidx.compose.animation.core.tween(220),
+        label = "bottomScrimHeight",
+    )
+    val pageColor = GhostlyColors.Background
+    val brush = remember(pageColor) {
+        // A cubic ease-in rather than a straight ramp: the alpha holds under a few
+        // percent for the first half, so the eye can't find where the layer starts.
+        androidx.compose.ui.graphics.Brush.verticalGradient(
+            colorStops = Array(FADE_STOPS) { i ->
+                val t = i / (FADE_STOPS - 1f)
+                t to pageColor.copy(alpha = androidx.compose.animation.core.EaseInCubic.transform(t))
+            },
+        )
+    }
+    Box(modifier.fillMaxWidth().height(height).background(brush))
+}
+
+// ---------- queue notices ----------
+
+/**
+ * BitChord's QueueActionNotice: a brief confirmation ("Song will play next")
+ * shown just above the mini player. Each one has its own id, so repeating the
+ * same action restarts its lifetime.
+ */
+object QueueNotice {
+    data class Notice(val id: Int, val message: String)
+
+    private val _current = kotlinx.coroutines.flow.MutableStateFlow<Notice?>(null)
+    val current: kotlinx.coroutines.flow.StateFlow<Notice?> = _current
+    private var nextId = 0
+
+    fun show(message: String) {
+        nextId += 1
+        _current.value = Notice(nextId, message)
+    }
+
+    internal fun dismiss(id: Int) {
+        if (_current.value?.id == id) _current.value = null
+    }
+}
+
+/** Where [QueueNotice]s appear: fades and slides up, gone after three seconds (BitChord). */
+@Composable
+fun QueueNoticeHost(modifier: Modifier = Modifier) {
+    val notice by QueueNotice.current.collectAsState()
+    val reduceAnimation by com.ghostmikz.ghostly.data.Prefs.reduceAnimation.state.collectAsState()
+    LaunchedEffect(notice?.id) {
+        val shown = notice ?: return@LaunchedEffect
+        kotlinx.coroutines.delay(3_000)
+        QueueNotice.dismiss(shown.id)
+    }
+    androidx.compose.animation.AnimatedContent(
+        targetState = notice,
+        transitionSpec = {
+            if (reduceAnimation) {
+                androidx.compose.animation.EnterTransition.None togetherWith androidx.compose.animation.ExitTransition.None
+            } else {
+                (androidx.compose.animation.fadeIn() + androidx.compose.animation.slideInVertically { it / 2 }) togetherWith
+                    (androidx.compose.animation.fadeOut() + androidx.compose.animation.slideOutVertically { it / 2 })
+            }
+        },
+        contentKey = { it?.id },
+        label = "queueActionNotice",
+        modifier = modifier.fillMaxWidth(),
+    ) { current ->
+        if (current != null) {
+            androidx.compose.material3.Surface(
+                color = Color(0xFF282828),
+                contentColor = Color.White,
+                shape = RoundedCornerShape(5.dp),
+                shadowElevation = 4.dp,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 8.dp)
+                    .semantics { liveRegion = androidx.compose.ui.semantics.LiveRegionMode.Polite },
+            ) {
+                Text(current.message, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp))
+            }
+        }
+    }
+}
+
+// ---------- switch ----------
+
+private val SwitchTrackWidth = 64.dp
+private val SwitchTrackHeight = 28.dp
+private val SwitchThumbWidth = 40.dp
+private val SwitchThumbHeight = 24.dp
+private val SwitchThumbPadding = 2.dp
+
+/**
+ * BitChord's IosSwitch: a wide green capsule and a white pill of a thumb, which
+ * stretches a little toward where it is going while pressed. It buzzes when
+ * [checked] flips rather than when it is tapped, since the row around it toggles
+ * too. A null [onCheckedChange] makes it a read-out; the row owns the tap.
+ */
+@Composable
+fun IosSwitch(checked: Boolean, onCheckedChange: ((Boolean) -> Unit)?, modifier: Modifier = Modifier, enabled: Boolean = true) {
+    val dark = GhostlyColors.Background.luminance() < 0.5f
+    val interaction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val position by androidx.compose.animation.core.animateFloatAsState(
+        if (checked) 1f else 0f, androidx.compose.animation.core.spring(dampingRatio = 0.78f, stiffness = 700f), label = "iosSwitchThumb",
+    )
+    val stretch by androidx.compose.animation.core.animateFloatAsState(
+        if (pressed) 1.18f else 1f, androidx.compose.animation.core.spring(dampingRatio = 0.7f, stiffness = 900f), label = "iosSwitchStretch",
+    )
+    val track by animateColorAsState(
+        when {
+            checked && dark -> Color(0xFF30D158)
+            checked -> Color(0xFF34C759)
+            else -> Color(0xFF8E8E93).copy(alpha = if (dark) 0.36f else 0.22f)
+        },
+        label = "iosSwitchTrack",
+    )
+    val ltr = androidx.compose.ui.platform.LocalLayoutDirection.current == androidx.compose.ui.unit.LayoutDirection.Ltr
+    val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
+    // Skips the first run, so a switch scrolling into view stays quiet.
+    var settled by remember { mutableStateOf(false) }
+    LaunchedEffect(checked) {
+        if (settled) haptics.performHapticFeedback(
+            if (checked) androidx.compose.ui.hapticfeedback.HapticFeedbackType.ToggleOn
+            else androidx.compose.ui.hapticfeedback.HapticFeedbackType.ToggleOff,
+        )
+        settled = true
+    }
+    Box(
+        modifier
+            .graphicsLayer { alpha = if (enabled) 1f else 0.45f }
+            .then(
+                if (onCheckedChange != null) {
+                    Modifier.minimumInteractiveComponentSize().toggleable(
+                        value = checked, enabled = enabled, interactionSource = interaction, indication = null,
+                        role = androidx.compose.ui.semantics.Role.Switch, onValueChange = onCheckedChange,
+                    )
+                } else {
+                    Modifier
+                },
+            )
+            .size(SwitchTrackWidth, SwitchTrackHeight)
+            .clip(CircleShape)
+            .background(track),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Box(
+            Modifier
+                .graphicsLayer {
+                    val travel = (SwitchTrackWidth - SwitchThumbWidth - SwitchThumbPadding * 2).toPx()
+                    val x = SwitchThumbPadding.toPx() + travel * position
+                    translationX = if (ltr) x else -x
+                    // Grows from the edge it is leaving, so the stretch reads as
+                    // reaching toward the other side.
+                    transformOrigin = androidx.compose.ui.graphics.TransformOrigin(if (checked == ltr) 1f else 0f, 0.5f)
+                    scaleX = stretch
+                }
+                .size(SwitchThumbWidth, SwitchThumbHeight)
+                .shadow(2.dp, CircleShape)
+                .background(Color.White, CircleShape),
+        )
     }
 }

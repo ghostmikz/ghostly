@@ -1,5 +1,12 @@
 package com.ghostmikz.ghostly.ui
 
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.input.pointer.positionChanged
+import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.material.icons.rounded.Waves
 import kotlin.math.roundToInt
 import androidx.compose.material.icons.rounded.Tune
@@ -647,13 +654,45 @@ private fun bitPerfectSubtitle(mode: BitPerfectMode, status: BitPerfectOutput.St
     else -> "Waiting for a lossless track on a supported output"
 }
 
-/** Faded and untouchable while bit-perfect output is ready (BitChord's BypassedByBitPerfect). */
+/**
+ * Faded and untouchable while bit-perfect output is ready (BitChord's
+ * BypassedByBitPerfect). Only the touches that would change something are
+ * taken (the press and release, and a sideways drag on a slider), so the page
+ * still scrolls when a swipe starts on one of these rows.
+ */
 @Composable
 private fun Bypassed(on: Boolean, content: @Composable () -> Unit) {
-    Box(if (on) Modifier.alpha(0.4f) else Modifier) {
-        content()
-        if (on) Box(Modifier.matchParentSize().clickable(remember { MutableInteractionSource() }, null) {})
-    }
+    val alpha by androidx.compose.animation.core.animateFloatAsState(if (on) 0.38f else 1f, label = "bypassed")
+    Column(
+        Modifier.alpha(alpha).then(
+            if (on) {
+                Modifier.pointerInput(Unit) {
+                    awaitEachGesture {
+                        awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial).consume()
+                        var sideways: Boolean? = null
+                        var travel = androidx.compose.ui.geometry.Offset.Zero
+                        do {
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            event.changes.forEach { change ->
+                                when {
+                                    change.changedToUpIgnoreConsumed() -> change.consume()
+                                    change.positionChanged() -> {
+                                        travel += change.positionChange()
+                                        if (sideways == null && travel.getDistance() > viewConfiguration.touchSlop / 2) {
+                                            sideways = kotlin.math.abs(travel.x) > kotlin.math.abs(travel.y)
+                                        }
+                                        if (sideways == true) change.consume()
+                                    }
+                                }
+                            }
+                        } while (event.changes.any { it.pressed })
+                    }
+                }
+            } else {
+                Modifier
+            },
+        ),
+    ) { content() }
 }
 
 // ---------- building blocks ----------
@@ -736,16 +775,7 @@ private fun SwitchRow(
                     Text(title, color = GhostlyColors.Text.copy(alpha = fade), fontSize = 18.sp)
                     if (subtitle != null) Text(subtitle, color = GhostlyColors.TextSecondary.copy(alpha = fade), fontSize = 15.sp)
                 }
-                Switch(
-                    checked, onChange, enabled = enabled,
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color.White, checkedTrackColor = Color(0xFF34C759), checkedBorderColor = Color.Transparent,
-                        uncheckedThumbColor = Color.White, uncheckedTrackColor = GhostlyColors.SwitchOff, uncheckedBorderColor = Color.Transparent,
-                        disabledUncheckedThumbColor = Color.White.copy(alpha = 0.5f), disabledUncheckedTrackColor = GhostlyColors.SwitchOff.copy(alpha = 0.5f),
-                        disabledUncheckedBorderColor = Color.Transparent,
-                    ),
-                    thumbContent = {},
-                )
+                IosSwitch(checked, onChange, enabled = enabled)
                 Spacer(Modifier.width(16.dp))
             }
             if (!last) HorizontalDivider(thickness = 0.5.dp, color = GhostlyColors.CardHigh)
