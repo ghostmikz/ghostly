@@ -3,6 +3,23 @@
 A simple, offline music player for Android. It plays the audio files on your phone.
 The only online feature is optional Last.fm scrobbling.
 
+## Screenshots
+
+<p>
+  <img src="docs/screenshots/home.png" width="24%" alt="Listen Now">
+  <img src="docs/screenshots/player.png" width="24%" alt="Player">
+  <img src="docs/screenshots/queue.png" width="24%" alt="Queue">
+  <img src="docs/screenshots/library.png" width="24%" alt="Library">
+</p>
+<p>
+  <img src="docs/screenshots/album.png" width="24%" alt="Album">
+  <img src="docs/screenshots/replay.png" width="24%" alt="Replay">
+  <img src="docs/screenshots/landscape.png" width="49%" alt="Player in landscape">
+</p>
+
+<sub>Music in the screenshots is Creative Commons, from the Internet Archive netlabels collection:
+ProleteR, Boogie Belgique, Candlegravity, Poodleplay Arkestra and The Underscore Orkestra.</sub>
+
 ## Features
 
 - **BitChord-style design**: floating tab bar and mini player, an Apple Music-like player
