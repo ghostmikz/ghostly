@@ -13,7 +13,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/ghostmikz/ghostly/releases/latest"><img src="https://img.shields.io/github/v/release/ghostmikz/ghostly?style=for-the-badge&logo=android&logoColor=white&label=Download%20APK&labelColor=1a1a1a&color=c0392b" height="44" alt="Download APK"></a>
+  <a href="https://github.com/ghostmikz/ghostly/releases/latest"><img src="docs/readme/get-it-on-github.png" height="72" alt="Get it on GitHub"></a>
+  <a href="https://apps.obtainium.imranr.dev/redirect?r=obtainium://add/https://github.com/ghostmikz/ghostly"><img src="docs/readme/get-it-on-obtainium.png" height="72" alt="Get it on Obtainium"></a>
 </p>
 
 <p align="center">
