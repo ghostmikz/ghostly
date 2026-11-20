@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/ghostmikz/ghostly/releases/latest"><b>Download the APK</b></a>
+  <a href="https://github.com/ghostmikz/ghostly/releases/latest"><img src="https://img.shields.io/github/v/release/ghostmikz/ghostly?style=for-the-badge&logo=android&logoColor=white&label=Download%20APK&labelColor=1a1a1a&color=c0392b" height="44" alt="Download APK"></a>
 </p>
 
 <p align="center">
