@@ -87,6 +87,17 @@ fun PlaylistPage(playlist: Playlist, library: Library, currentId: Long?, actions
     val songs = remember(playlist, library) { playlist.songsIn(library) }
     var renaming by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
+    var reordering by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+    if (reordering) {
+        ReorderPlaylistPage(
+            playlist = playlist,
+            songs = songs,
+            onSave = { Playlists.setOrder(playlist.id, it.map { s -> s.id }); reordering = false },
+            onClose = { reordering = false },
+            contentPadding = PaddingValues(bottom = bottomPad),
+        )
+        return
+    }
     CollectionScreen(
         playlist.title, if (playlist.isLiked) "Songs you liked" else "Playlist",
         { m, c -> PlaylistCover(playlist, library, m, c) },
@@ -95,6 +106,7 @@ fun PlaylistPage(playlist: Playlist, library: Library, currentId: Long?, actions
         extra = if (playlist.isLiked) null else ({
             Row(Modifier.padding(top = 14.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 SmallPill("Rename") { renaming = true }
+                if (songs.size > 1) SmallPill("Reorder songs") { reordering = true }
                 SmallPill("Delete") { deleting = true }
             }
         }),

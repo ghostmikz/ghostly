@@ -1,5 +1,6 @@
 package com.ghostmikz.ghostly.ui
 
+import androidx.compose.material.icons.rounded.Waves
 import kotlin.math.roundToInt
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.GraphicEq
@@ -253,6 +254,13 @@ private fun PlaybackPage() {
     Spacer(Modifier.height(12.dp))
     Card {
         PrefRow(Icons.Outlined.VolumeOff, "Skip silence", "Trim gaps longer than a second", Prefs.skipSilenceOn)
+        // BitChord's crossfade row: 0 to 12 seconds, a step a second, "Off" at 0.
+        val crossfade by Prefs.crossfadeSeconds.state.collectAsState()
+        SliderRow(
+            Icons.Rounded.Waves, "Crossfade", "Blends one track into the next",
+            if (crossfade == 0) "Off" else "${crossfade}s", crossfade.toFloat(),
+            { Prefs.crossfadeSeconds.set(it.roundToInt()) }, 0f..12f, 11,
+        )
         NavRow(Icons.Outlined.Equalizer, "Equalizer", "Tone and bands, from your phone's equalizer", last = true) {
             val opened = runCatching {
                 context.startActivity(

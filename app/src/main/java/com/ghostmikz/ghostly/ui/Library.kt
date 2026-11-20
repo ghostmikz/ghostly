@@ -1,5 +1,9 @@
 package com.ghostmikz.ghostly.ui
 
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.automirrored.rounded.Sort
+import com.ghostmikz.ghostly.data.sortedForLibrary
+import com.ghostmikz.ghostly.data.LocalMusicSort
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -75,7 +79,9 @@ fun LibraryScreen(
     // Kept for the whole app session (not just this composition), so the tab
     // is still the chosen one after visiting a page or the other tabs.
     var tab by libraryTab
-    val songs = library.songs
+    // BitChord's device-library sort; Play and Shuffle follow the order shown.
+    val sort by Prefs.localSort.collectAsState()
+    val songs = remember(library.songs, sort) { library.songs.sortedForLibrary(sort) }
     val header: @Composable () -> Unit = {
         Column {
             TopBarSpace()
@@ -91,7 +97,7 @@ fun LibraryScreen(
             )
             Spacer(Modifier.height(18.dp))
             SegmentedTabs(LIB_TABS, tab, { tab = it })
-            Spacer(Modifier.height(8.dp))
+            if (tab == 0) SortRow(sort, Prefs::setLocalSort) else Spacer(Modifier.height(8.dp))
         }
     }
     when (tab) {
@@ -283,7 +289,40 @@ fun ArtistPage(artist: Artist, currentId: Long?, actions: LibraryActions, bottom
 
 @Composable
 fun FolderPage(path: String, songs: List<Song>, currentId: Long?, actions: LibraryActions, bottomPad: Dp) {
-    CollectionScreen(folderName(path), path, { m, c -> SymbolCover(Icons.Rounded.Folder, m, c) }, songs, currentId, actions, bottomPad)
+    // A device folder takes the same sort as the library, as in BitChord.
+    val sort by Prefs.localSort.collectAsState()
+    val sorted = remember(songs, sort) { songs.sortedForLibrary(sort) }
+    CollectionScreen(folderName(path), path, { m, c -> SymbolCover(Icons.Rounded.Folder, m, c) }, sorted, currentId, actions, bottomPad)
+}
+
+/**
+ * The Songs tab's sort: the order it is in now, opening BitChord's sort menu
+ * (each order, a tick against the one in force).
+ */
+@Composable
+private fun SortRow(sort: LocalMusicSort, onSort: (LocalMusicSort) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), contentAlignment = Alignment.CenterEnd) {
+        Row(
+            Modifier.clip(androidx.compose.foundation.shape.CircleShape).clickable { open = true }.padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(sort.label, color = GhostlyColors.TextSecondary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            Spacer(Modifier.width(6.dp))
+            Icon(Icons.AutoMirrored.Rounded.Sort, "Sort music", tint = GhostlyColors.TextSecondary, modifier = Modifier.size(18.dp))
+        }
+        DropdownMenu(open, { open = false }, containerColor = GhostlyColors.Card, shape = RoundedCornerShape(14.dp)) {
+            LocalMusicSort.entries.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(option.label, color = GhostlyColors.Text) },
+                    trailingIcon = if (option == sort) {
+                        { Icon(Icons.Rounded.Check, null, tint = GhostlyColors.Text) }
+                    } else null,
+                    onClick = { onSort(option); open = false },
+                )
+            }
+        }
+    }
 }
 
 // ---------- helpers ----------

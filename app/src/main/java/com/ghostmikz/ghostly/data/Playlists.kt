@@ -91,6 +91,21 @@ object Playlists {
         return AddResult(added, already)
     }
 
+    /**
+     * The playlist in a new order. [songIds] are the songs the reorder page showed
+     * (the ones on the phone); any the playlist holds that aren't on the phone keep
+     * their places at the end, so a reorder never drops them.
+     */
+    fun setOrder(id: String, songIds: List<Long>) = mutate { list ->
+        list.map { p ->
+            if (p.id != id) p
+            else {
+                val shown = songIds.toHashSet()
+                p.copy(songIds = songIds.filter { it in p.songIds } + p.songIds.filterNot { it in shown })
+            }
+        }
+    }
+
     fun remove(id: String, songId: Long) =
         mutate { list -> list.map { if (it.id == id) it.copy(songIds = it.songIds.filterNot { s -> s == songId }) else it } }
 

@@ -1,5 +1,7 @@
 package com.ghostmikz.ghostly.ui
 
+import com.ghostmikz.ghostly.playback.queueTier
+import com.ghostmikz.ghostly.playback.queueEntryId
 import com.ghostmikz.ghostly.playback.asQueueEntry
 import com.ghostmikz.ghostly.playback.QueueTier
 import com.ghostmikz.ghostly.playback.QueueShuffle
@@ -31,6 +33,10 @@ data class PlayerState(
     val shuffle: Boolean = false,
     val repeat: Int = Player.REPEAT_MODE_OFF,
     val queue: List<Song> = emptyList(),
+    /** Per queue row: whether it was queued by hand ("Play next") or came with the list. */
+    val queueTiers: List<QueueTier> = emptyList(),
+    /** Per queue row: its entry id, so a row keeps its identity through a reorder. */
+    val queueEntryIds: List<String?> = emptyList(),
     val queueIndex: Int = 0,
     val from: String = "",
 )
@@ -85,7 +91,8 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         // position always maps back to the right player index.
         val order = playOrder(c)
         queueOrder = order
-        val queue = order.map { i -> c.getMediaItemAt(i).let { item -> ids[item.mediaId] ?: item.asSong() } }
+        val items = order.map { c.getMediaItemAt(it) }
+        val queue = items.map { item -> ids[item.mediaId] ?: item.asSong() }
         _state.value = PlayerState(
             current = c.currentMediaItem?.let { ids[it.mediaId] ?: it.asSong() },
             isPlaying = c.isPlaying,
@@ -94,6 +101,8 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             shuffle = QueueShuffle.enabled.value,
             repeat = c.repeatMode,
             queue = queue,
+            queueTiers = items.map { it.queueTier },
+            queueEntryIds = items.map { it.queueEntryId },
             queueIndex = order.indexOf(c.currentMediaItemIndex),
             from = from,
         )
@@ -137,6 +146,31 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private var queueOrder: List<Int> = emptyList()
+
+    // BitChord's queue edits: the player's own move/remove, and Clear takes only
+    // the songs queued by hand (QueueCoordinator.clearUserQueue).
+    fun removeQueueItem(index: Int) = controller?.let { c ->
+        queueOrder.getOrNull(index)?.takeIf { it < c.mediaItemCount }?.let { c.removeMediaItem(it) }
+    }
+
+    fun moveQueueItem(from: Int, to: Int) = controller?.let { c ->
+        val a = queueOrder.getOrNull(from) ?: return@let
+        val b = queueOrder.getOrNull(to) ?: return@let
+        if (a < c.mediaItemCount && b < c.mediaItemCount) c.moveMediaItem(a, b)
+    }
+
+    fun clearUserQueue() = controller?.let { c ->
+        val user = ((c.currentMediaItemIndex + 1) until c.mediaItemCount)
+            .filter { c.getMediaItemAt(it).queueTier == QueueTier.USER_QUEUE }
+        // Removed as runs, from the end, so earlier indices stay valid.
+        var end = user.size
+        while (end > 0) {
+            var start = end - 1
+            while (start > 0 && user[start - 1] == user[start] - 1) start--
+            c.removeMediaItems(user[start], user[end - 1] + 1)
+            end = start
+        }
+    }
 
     private fun playOrder(c: Player): List<Int> {
         val timeline = c.currentTimeline

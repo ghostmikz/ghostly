@@ -293,13 +293,7 @@ fun NowPlayingScreen(
                         if (!hideVolume) VolumeBar()
                     }
                 },
-                queuePane = {
-                    Column(Modifier.fillMaxSize()) {
-                        Text("Playing Next", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(vertical = 8.dp))
-                        QueueList(state, vm, Modifier.fillMaxSize())
-                    }
-                },
+                queuePane = { PlayerQueue(state, vm, Modifier.fillMaxSize().padding(top = 8.dp), padding = 0.dp) },
             )
         } else Column(Modifier.fillMaxSize().systemBarsPadding()) {
             // handle + where it is playing from
@@ -469,40 +463,26 @@ private fun VolumeBar() {
 @Composable
 private fun QueueSheet(state: PlayerState, vm: PlayerViewModel, onDismiss: () -> Unit) {
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = GhostlyColors.Card, contentColor = Color.White) {
-        Text("Playing Next", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
-        QueueList(state, vm, Modifier.fillMaxHeight(0.75f))
+        PlayerQueue(state, vm, Modifier.fillMaxHeight(0.75f))
     }
 }
 
-/** The queue's rows: shared by the portrait sheet and the landscape player's right column. */
+/** BitChord's queue, wired to this player: shared by the portrait sheet and the landscape column. */
 @Composable
-private fun QueueList(state: PlayerState, vm: PlayerViewModel, modifier: Modifier) {
-    run {
-        val list = rememberLazyListState(
-            initialFirstVisibleItemIndex = if (Prefs.queueHistory.value) state.queueIndex.coerceAtLeast(0) else 0,
-        )
-        val showHistory by Prefs.queueHistory.state.collectAsState()
-        val first = if (showHistory) 0 else state.queueIndex.coerceAtLeast(0)
-        LazyColumn(state = list, modifier = modifier) {
-            itemsIndexed(state.queue.drop(first), key = { j, s -> "${s.id}-${j + first}" }) { j, s ->
-                val i = j + first
-                val now = i == state.queueIndex
-                Row(
-                    Modifier.animateItem().fillMaxWidth().clickable { vm.playQueueItem(i) }.padding(horizontal = 20.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    AlbumArt(s, Modifier.size(48.dp), corner = 6.dp)
-                    Column(Modifier.weight(1f).padding(horizontal = 14.dp)) {
-                        Text(s.title, color = Color.White, fontSize = 16.sp, fontWeight = if (now) FontWeight.Bold else FontWeight.Medium,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(s.artist, color = GhostlyColors.TextSecondary, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                    if (now) EqBars(Modifier.size(18.dp))
-                }
-            }
-        }
-    }
+private fun PlayerQueue(state: PlayerState, vm: PlayerViewModel, modifier: Modifier, padding: androidx.compose.ui.unit.Dp = 20.dp) {
+    InlineQueue(
+        queue = state.queue,
+        tiers = state.queueTiers,
+        entryIds = state.queueEntryIds,
+        currentIndex = state.queueIndex,
+        contextTitle = state.from.takeIf { it.isNotBlank() },
+        onJumpTo = vm::playQueueItem,
+        onRemove = vm::removeQueueItem,
+        onMove = vm::moveQueueItem,
+        onClear = vm::clearUserQueue,
+        modifier = modifier,
+        contentPadding = padding,
+    )
 }
 
 /** "Stats for nerds": format, bitrate and sample rate, read from the file itself. */

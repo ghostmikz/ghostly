@@ -22,6 +22,11 @@
         android:theme="@style/Theme.Ghostly"
         android:enableOnBackInvokedCallback="true">
 
+        <!-- Android Auto: Ghostly is a media app it can browse and play (as BitChord). -->
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc" />
+
         <!--
           As BitChord: no fixed orientation, and a rotation is a recomposition rather
           than an activity restart, so the open player, queue and scroll positions
@@ -45,7 +50,9 @@
             android:exported="true"
             android:foregroundServiceType="mediaPlayback">
             <intent-filter>
+                <action android:name="androidx.media3.session.MediaLibraryService" />
                 <action android:name="androidx.media3.session.MediaSessionService" />
+                <action android:name="android.media.browse.MediaBrowserService" />
             </intent-filter>
         </service>
         <!-- Home screen widgets (BitChord's MediaWidget): 2x2, 4x2 and the 4x1 capsule. -->

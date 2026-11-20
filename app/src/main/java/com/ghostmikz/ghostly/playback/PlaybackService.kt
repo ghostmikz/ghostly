@@ -5,11 +5,17 @@ import android.content.Intent
 import android.media.audiofx.AudioEffect
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaSession
-import androidx.media3.session.MediaSessionService
+import androidx.media3.session.LibraryResult
+import androidx.media3.session.MediaLibraryService
+import androidx.media3.session.MediaLibraryService.LibraryParams
+import androidx.media3.session.MediaLibraryService.MediaLibrarySession
+import com.google.common.collect.ImmutableList
+import kotlinx.coroutines.guava.future
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionError
 import androidx.media3.session.SessionResult
@@ -43,12 +49,21 @@ const val ACTION_TOGGLE_FAVORITE = "com.ghostmikz.ghostly.action.TOGGLE_FAVORITE
 const val ACTION_TOGGLE_SHUFFLE = "com.ghostmikz.ghostly.action.TOGGLE_SHUFFLE"
 
 /** Plays music in the background, owns the notification / lock-screen controls and Last.fm scrobbling. */
-class PlaybackService : MediaSessionService() {
-    private var session: MediaSession? = null
+class PlaybackService : MediaLibraryService() {
+    private var session: MediaLibrarySession? = null
+    /** What Android Auto browses (BitChord's MediaLibraryCallback tree). */
+    private val autoLibrary by lazy { AutoLibrary(this) }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     /** Only exists while Last.fm scrobbling is fully set up and on (BitChord). */
     private var scrobbler: ScrobbleManager? = null
-    private var recorded = false // has the current track been added to History yet
+    private var recorded = false
+
+    /** The player the session is on; changes at every crossfade handoff. */
+    private lateinit var player: ExoPlayer
+    /** The standby the next track fades in on. */
+    private lateinit var spare: ExoPlayer
+    private var crossfade: CrossfadeController? = null
+    private lateinit var playbackListener: Player.Listener // has the current track been added to History yet
 
     override fun onCreate() {
         super.onCreate()
@@ -58,19 +73,15 @@ class PlaybackService : MediaSessionService() {
         ListeningStats.init(this)
         com.ghostmikz.ghostly.ui.ArtCache.sizeFor(this)
 
-        val player = ExoPlayer.Builder(this)
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(C.USAGE_MEDIA)
-                    .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
-                    .build(),
-                /* handleAudioFocus = */ true,
-            )
-            .setHandleAudioBecomingNoisy(true) // pause when headphones are unplugged
-            .setWakeMode(C.WAKE_MODE_LOCAL)
-            .build()
+        // Two identical players, as BitChord: the session's, and a standby the next
+        // track fades in on (see CrossfadeController). They share one audio session,
+        // so the system equalizer doesn't jump at a handoff, and only the session's
+        // player takes audio focus and pauses on unplugged headphones.
+        player = buildPlayer(owns = true)
+        spare = buildPlayer(owns = false)
+        spare.setAudioSessionId(player.audioSessionId)
 
-        player.addListener(object : Player.Listener {
+        playbackListener = object : Player.Listener {
             override fun onMediaItemTransition(item: MediaItem?, reason: Int) {
                 // "After this song" (BitChord): the queue moving on by itself is the moment the
                 // song finished. REPEAT counts too, or the timer never fires with repeat-one on.
@@ -124,7 +135,8 @@ class PlaybackService : MediaSessionService() {
                 if (recorded) return
                 item?.mediaId?.toLongOrNull()?.let { History.recordPlay(it); recorded = true }
             }
-        })
+        }
+        player.addListener(playbackListener)
 
         // Sleep timer (BitChord): pause once the deadline passes. collectLatest restarts the
         // wait when the timer is set again instead of both firing.
@@ -189,7 +201,7 @@ class PlaybackService : MediaSessionService() {
         }
 
         // Follow the "Skip silence" setting live.
-        scope.launch { Prefs.skipSilence.collect { player.skipSilenceEnabled = it } }
+        scope.launch { Prefs.skipSilence.collect { player.skipSilenceEnabled = it; spare.skipSilenceEnabled = it } }
 
         // Let the phone's equalizer (if it has one) attach to our audio.
         audioSessionId = player.audioSessionId
@@ -205,9 +217,10 @@ class PlaybackService : MediaSessionService() {
             Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        session = MediaSession.Builder(this, player)
+        val fader = CrossfadeController(scope, { player }, { spare }, ::adoptPlayer).also { it.start() }
+        crossfade = fader
+        session = MediaLibrarySession.Builder(this, SessionPlayer(player, fader), LibraryCallback())
             .setSessionActivity(openApp)
-            .setCallback(WidgetCommands())
             .build()
 
         // A widget tap after the process died binds a fresh service: give it the last queue.
@@ -221,13 +234,78 @@ class PlaybackService : MediaSessionService() {
         scope.launch { History.favorites.collect { publishWidgetState() } }
     }
 
-    /** Lets the widget's star and Shuffle reach the player, as BitChord's notification commands do. */
-    private inner class WidgetCommands : MediaSession.Callback {
+    private fun buildPlayer(owns: Boolean): ExoPlayer = ExoPlayer.Builder(this)
+        .setAudioAttributes(AUDIO_ATTRIBUTES, /* handleAudioFocus = */ owns)
+        .setHandleAudioBecomingNoisy(owns) // pause when headphones are unplugged
+        .setWakeMode(C.WAKE_MODE_LOCAL)
+        .build()
+
+    private fun setSessionOwner(target: ExoPlayer, owns: Boolean) {
+        target.setAudioAttributes(AUDIO_ATTRIBUTES, /* handleAudioFocus = */ owns)
+        target.setHandleAudioBecomingNoisy(owns)
+    }
+
+    /**
+     * BitChord's adoptPlayer: halfway through a crossfade the session moves to the
+     * player the new track is playing on. That player started the track as its own
+     * first item, so no transition reaches the listener; it is told by hand, or
+     * history, scrobbling, Replay and the sleep timer would all miss the track.
+     */
+    private fun adoptPlayer(outgoing: ExoPlayer, incoming: ExoPlayer) {
+        setSessionOwner(outgoing, owns = false)
+        setSessionOwner(incoming, owns = true)
+        outgoing.removeListener(playbackListener)
+        player = incoming
+        spare = outgoing
+        incoming.addListener(playbackListener)
+        crossfade?.let { session?.player = SessionPlayer(incoming, it) }
+        playbackListener.onMediaItemTransition(incoming.currentMediaItem, Player.MEDIA_ITEM_TRANSITION_REASON_AUTO)
+        playbackListener.onIsPlayingChanged(incoming.isPlaying)
+    }
+
+    /**
+     * What controllers (the app, the notification, the widget) talk to: the
+     * session's player, with every user skip or jump first ending any crossfade in
+     * progress — a manual skip never crossfades (BitChord's SessionPlayer).
+     */
+    private class SessionPlayer(player: Player, private val crossfade: CrossfadeController) : ForwardingPlayer(player) {
+        override fun seekTo(mediaItemIndex: Int, positionMs: Long) {
+            crossfade.onSkipRequested()
+            super.seekTo(mediaItemIndex, positionMs)
+        }
+
+        override fun seekToPreviousMediaItem() {
+            crossfade.onSkipRequested()
+            super.seekToPreviousMediaItem()
+        }
+
+        override fun seekToPrevious() {
+            crossfade.onSkipRequested()
+            super.seekToPrevious()
+        }
+
+        override fun seekToNextMediaItem() {
+            crossfade.onSkipRequested()
+            super.seekToNextMediaItem()
+        }
+
+        override fun seekToNext() {
+            crossfade.onSkipRequested()
+            super.seekToNext()
+        }
+    }
+
+    /**
+     * The widget's star and Shuffle (as BitChord's notification commands), and the
+     * browse tree, search and play requests Android Auto sends (BitChord's
+     * MediaLibraryCallback).
+     */
+    private inner class LibraryCallback : MediaLibrarySession.Callback {
         override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
             // Like and Shuffle are this app's own (its widget and UI); other apps that
             // connect for playback controls get the standard commands only.
             val own = controller.packageName == packageName
-            val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon().apply {
+            val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon().apply {
                 if (own) {
                     add(SessionCommand(ACTION_TOGGLE_FAVORITE, Bundle.EMPTY))
                     add(SessionCommand(ACTION_TOGGLE_SHUFFLE, Bundle.EMPTY))
@@ -251,6 +329,89 @@ class PlaybackService : MediaSessionService() {
                 else -> return Futures.immediateFuture(SessionResult(SessionError.ERROR_NOT_SUPPORTED))
             }
             return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+        }
+
+        override fun onGetLibraryRoot(
+            session: MediaLibrarySession,
+            browser: MediaSession.ControllerInfo,
+            params: LibraryParams?,
+        ): ListenableFuture<LibraryResult<MediaItem>> {
+            val (root, rootParams) = autoLibrary.rootItem(params)
+            return Futures.immediateFuture(LibraryResult.ofItem(root, rootParams))
+        }
+
+        override fun onGetChildren(
+            session: MediaLibrarySession,
+            browser: MediaSession.ControllerInfo,
+            parentId: String,
+            page: Int,
+            pageSize: Int,
+            params: LibraryParams?,
+        ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> = scope.future(Dispatchers.IO) {
+            val (items, returnParams) = autoLibrary.children(parentId, page, pageSize)
+            LibraryResult.ofItemList(ImmutableList.copyOf(items), returnParams)
+        }
+
+        override fun onGetItem(
+            session: MediaLibrarySession,
+            browser: MediaSession.ControllerInfo,
+            mediaId: String,
+        ): ListenableFuture<LibraryResult<MediaItem>> = scope.future(Dispatchers.IO) {
+            autoLibrary.item(mediaId)?.let { LibraryResult.ofItem(it, null) }
+                ?: LibraryResult.ofError(SessionError.ERROR_BAD_VALUE)
+        }
+
+        override fun onSearch(
+            session: MediaLibrarySession,
+            browser: MediaSession.ControllerInfo,
+            query: String,
+            params: LibraryParams?,
+        ): ListenableFuture<LibraryResult<Void>> = scope.future(Dispatchers.IO) {
+            val count = autoLibrary.search(query).size
+            session.notifySearchResultChanged(browser, query, count, params)
+            LibraryResult.ofVoid(params)
+        }
+
+        override fun onGetSearchResult(
+            session: MediaLibrarySession,
+            browser: MediaSession.ControllerInfo,
+            query: String,
+            page: Int,
+            pageSize: Int,
+            params: LibraryParams?,
+        ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> = scope.future(Dispatchers.IO) {
+            val all = autoLibrary.search(query)
+            val from = (page.coerceAtLeast(0) * pageSize.coerceAtLeast(1)).coerceAtMost(all.size)
+            val to = (from + pageSize.coerceAtLeast(1)).coerceAtMost(all.size)
+            LibraryResult.ofItemList(ImmutableList.copyOf(all.subList(from, to)), params)
+        }
+
+        override fun onSetMediaItems(
+            mediaSession: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            mediaItems: List<MediaItem>,
+            startIndex: Int,
+            startPositionMs: Long,
+        ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> = scope.future(Dispatchers.IO) {
+            val (resolved, start) = autoLibrary.resolve(mediaItems, startIndex)
+            // Played from a car or a voice command: a fresh list, so shuffle as a
+            // queue edit starts off, and the player's own shuffle stays off.
+            if (resolved !== mediaItems) QueueShuffle.setEnabled(false)
+            MediaSession.MediaItemsWithStartPosition(
+                ImmutableList.copyOf(resolved),
+                start,
+                if (resolved === mediaItems) startPositionMs.coerceAtLeast(0L) else 0L,
+            )
+        }
+
+        override fun onAddMediaItems(
+            mediaSession: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            mediaItems: List<MediaItem>,
+        ): ListenableFuture<List<MediaItem>> = scope.future(Dispatchers.IO) {
+            // The app's own adds already carry their file; only a browser's need resolving.
+            if (mediaItems.all { it.localConfiguration != null }) mediaItems
+            else mediaItems.flatMap { autoLibrary.resolve(listOf(it), 0).first }
         }
     }
 
@@ -283,7 +444,7 @@ class PlaybackService : MediaSessionService() {
         MediaWidget.refresh(this)
     }
 
-    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
+    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = session
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         val player = session?.player
@@ -298,9 +459,16 @@ class PlaybackService : MediaSessionService() {
     companion object {
         /** The player's audio session, for opening the system equalizer from Settings. */
         @Volatile var audioSessionId: Int = 0
+
+        private val AUDIO_ATTRIBUTES = AudioAttributes.Builder()
+            .setUsage(C.USAGE_MEDIA)
+            .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+            .build()
     }
 
     override fun onDestroy() {
+        crossfade?.release()
+        crossfade = null
         scrobbler?.destroy()
         scrobbler = null
         scope.cancel()
@@ -317,6 +485,7 @@ class PlaybackService : MediaSessionService() {
             player.release()
             release()
         }
+        spare.release()
         session = null
         super.onDestroy()
     }

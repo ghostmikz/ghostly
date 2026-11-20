@@ -58,6 +58,14 @@ object Prefs {
     private val _lastfmUser = MutableStateFlow("")
     val lastfmUser: StateFlow<String> = _lastfmUser
 
+    /** BitChord's LocalMusicSort for the library's songs, kept until changed. */
+    private val _localSort = MutableStateFlow(LocalMusicSort.TITLE_ASC)
+    val localSort: StateFlow<LocalMusicSort> = _localSort
+    fun setLocalSort(order: LocalMusicSort) {
+        _localSort.value = order
+        edit { putString("local_music_sort", order.name) }
+    }
+
     /** "system", "light" or "dark" (Settings > Appearance > Theme). */
     private val _theme = MutableStateFlow("system")
     val theme: StateFlow<String> = _theme
@@ -77,6 +85,8 @@ object Prefs {
     val scrobbleDelaySeconds = IntPref("scrobble_delay_seconds", 180)
     // Playback
     val skipSilenceOn = BoolPref("skip_silence", false)
+    /** BitChord's crossfade, in whole seconds; 0 is off (the default). */
+    val crossfadeSeconds = IntPref("crossfade_seconds", 0)
     // Appearance
     val reduceAnimation = BoolPref("reduce_animation", false)
     val reduceBlur = BoolPref("reduce_blur", false)
@@ -101,7 +111,7 @@ object Prefs {
         liquidGlass, glassPerformance, filterNonMusic, swipePlayNext, stopOnClose, hideVolume, hideStatusBar, queueHistory, hideSongStatus, nerdStats,
     )
 
-    private val numbers = listOf(scrobbleMinDuration, scrobbleDelaySeconds)
+    private val numbers = listOf(scrobbleMinDuration, scrobbleDelaySeconds, crossfadeSeconds)
     private val floats = listOf(scrobbleDelayPercent)
 
     // Older names kept so the rest of the app reads naturally.
@@ -147,6 +157,8 @@ object Prefs {
     private fun reload() {
         _lastfmUser.value = account.getString("lastfm_user", "").orEmpty()
         _theme.value = sp.getString("theme", "system") ?: "system"
+        _localSort.value = sp.getString("local_music_sort", null)
+            ?.let { saved -> LocalMusicSort.entries.firstOrNull { it.name == saved } } ?: LocalMusicSort.TITLE_ASC
         all.forEach { it.load(sp) }
         numbers.forEach { it.load(sp) }
         floats.forEach { it.load(sp) }
@@ -175,7 +187,7 @@ object Prefs {
     /** Settings as JSON for "Export data". The Last.fm session is left out on purpose. */
     fun exportJson(): JSONObject {
         val o = JSONObject()
-        sp.all.forEach { (k, v) -> if ((v is Boolean || v is Int || v is Float || k == "theme") && !k.startsWith("lastfm_user") && !k.startsWith("lastfm_session")) o.put(k, v) }
+        sp.all.forEach { (k, v) -> if ((v is Boolean || v is Int || v is Float || k == "theme" || k == "local_music_sort") && !k.startsWith("lastfm_user") && !k.startsWith("lastfm_session")) o.put(k, v) }
         return o
     }
 
@@ -185,6 +197,7 @@ object Prefs {
                 when {
                     k.startsWith("lastfm_user") || k.startsWith("lastfm_session") -> Unit
                     k == "theme" -> putString(k, o.optString(k, "system"))
+                    k == "local_music_sort" -> putString(k, o.optString(k))
                     k == "scrobble_delay_percent" -> putFloat(k, o.optDouble(k, 0.5).toFloat())
                     o.opt(k) is Int -> putInt(k, o.optInt(k))
                     else -> putBoolean(k, o.optBoolean(k))

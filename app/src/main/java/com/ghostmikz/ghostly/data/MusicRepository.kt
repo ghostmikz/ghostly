@@ -20,6 +20,8 @@ data class Song(
     val dateAdded: Long,
     val folder: String,
     val isWav: Boolean = false,
+    /** When the file last changed, in seconds (MediaStore DATE_MODIFIED), for BitChord's sort. */
+    val dateModified: Long = 0,
 ) {
     val uri: Uri get() = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id)
     val albumArtUri: Uri get() = ContentUris.withAppendedId(ALBUM_ART, albumId)
@@ -85,6 +87,7 @@ object MusicRepository {
             MediaStore.Audio.Media.TRACK,
             MediaStore.Audio.Media.YEAR,
             MediaStore.Audio.Media.DATE_ADDED,
+            MediaStore.Audio.Media.DATE_MODIFIED,
             folderCol,
             MediaStore.Audio.Media.MIME_TYPE,
         )
@@ -107,6 +110,7 @@ object MusicRepository {
             val iTrack = c.getColumnIndexOrThrow(MediaStore.Audio.Media.TRACK)
             val iYear = c.getColumnIndexOrThrow(MediaStore.Audio.Media.YEAR)
             val iAdded = c.getColumnIndexOrThrow(MediaStore.Audio.Media.DATE_ADDED)
+            val iModified = c.getColumnIndexOrThrow(MediaStore.Audio.Media.DATE_MODIFIED)
             val iFolder = c.getColumnIndexOrThrow(folderCol)
             val iMime = c.getColumnIndexOrThrow(MediaStore.Audio.Media.MIME_TYPE)
             while (c.moveToNext()) {
@@ -124,9 +128,30 @@ object MusicRepository {
                     dateAdded = c.getLong(iAdded),
                     folder = folder.trimEnd('/'),
                     isWav = c.getString(iMime).orEmpty().contains("wav"),
+                    dateModified = c.getLong(iModified),
                 )
             }
         }
         return out
     }
+}
+
+/** BitChord's LocalMusicSort: the stable, persisted order of the on-device library. */
+enum class LocalMusicSort(val label: String) {
+    TITLE_ASC("Alphabetical (A to Z)"),
+    TITLE_DESC("Alphabetical (Z to A)"),
+    DATE_ADDED("Date added (newest first)"),
+    DATE_MODIFIED("Date modified (newest first)"),
+}
+
+/** BitChord's sortedForLibrary: a song list in the order the sort menu picked. */
+fun List<Song>.sortedForLibrary(order: LocalMusicSort): List<Song> = when (order) {
+    LocalMusicSort.TITLE_ASC -> sortedWith(compareBy<Song> { it.title.lowercase(java.util.Locale.ROOT) })
+    LocalMusicSort.TITLE_DESC -> sortedWith(compareByDescending<Song> { it.title.lowercase(java.util.Locale.ROOT) })
+    LocalMusicSort.DATE_ADDED -> sortedWith(
+        compareByDescending<Song> { it.dateAdded }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.title },
+    )
+    LocalMusicSort.DATE_MODIFIED -> sortedWith(
+        compareByDescending<Song> { it.dateModified }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.title },
+    )
 }
