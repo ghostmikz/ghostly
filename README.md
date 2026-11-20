@@ -48,11 +48,15 @@ ProleteR, Boogie Belgique, Candlegravity, Poodleplay Arkestra and The Underscore
   with story cards and a picture you can share
 - **Home screen widgets**: 2x2, 4x2 and a 4x1 capsule with Like and Shuffle
 - **Last.fm**: sign in with your account, scrobble tracks and show "now playing"
+- **Audio output**: 16-bit or 32-bit float output, prefer a USB DAC, and bit-perfect output
+  to a DAC (Android 14 USB DAC, AAudio exclusive for built-in DACs, or Ghostly's own USB
+  driver with the DAC's volume)
 - **Your data**: export and import settings, history, playlists and Replay as one JSON file
 
 ## Build
 
-Needs JDK 17+ and the Android SDK. Put this in `local.properties`:
+Needs JDK 17+ and the Android SDK, with NDK 27.0.12077973 and CMake 3.22.1 for the
+bit-perfect drivers. Put this in `local.properties`:
 
 ```
 sdk.dir=/path/to/Android/Sdk
@@ -73,3 +77,7 @@ adapted from [BitChord](https://github.com/kushagrasinghx/BitChord) (GPLv3).
 Liquid Glass uses [Kyant0/backdrop](https://github.com/Kyant0/backdrop) (Apache License 2.0),
 included in `app/src/main/java/com/ghostmikz/ghostly/ui/backdrop`.
 Font: [Inter](https://rsms.me/inter/) (SIL Open Font License).
+The bit-perfect output in `playback/bitperfect` and `app/src/main/cpp/bitperfect` comes from BitChord,
+which adapted it from [Mornye](https://github.com/mornyeapp/Mornye) (LGPL-3.0). It is built with
+[Oboe](https://github.com/google/oboe) (Apache License 2.0) and [libusb](https://libusb.info) (LGPL-2.1),
+which CMake downloads at build time.

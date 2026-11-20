@@ -49,6 +49,54 @@ class FloatPref internal constructor(private val key: String, private val defaul
     }
 }
 
+/** One choice among an enum's values, saved by name (BitChord's output settings). */
+class EnumPref<E : Enum<E>> internal constructor(private val key: String, private val default: E, private val values: List<E>) {
+    private val flow = MutableStateFlow(default)
+    val state: StateFlow<E> = flow
+    val value: E get() = flow.value
+
+    internal fun load(sp: SharedPreferences) {
+        val saved = sp.getString(key, null)
+        flow.value = values.firstOrNull { it.name == saved } ?: default
+    }
+
+    fun set(v: E) {
+        flow.value = v
+        Prefs.edit { putString(key, v.name) }
+    }
+}
+
+/**
+ * The PCM handed to Android's AudioTrack (BitChord). Media3 opens either a
+ * 16-bit or a float track, so these are the only two; float is what carries a
+ * 24-bit file's extra depth through, on outputs that take it.
+ */
+enum class OutputPcmMode(val label: String) {
+    PCM_16("16-bit PCM"),
+    FLOAT_32("32-bit float"),
+}
+
+/**
+ * Which exclusive output, if any, a track is sent to unchanged (BitChord).
+ * Declared in the order the settings picker lists them; saved by name.
+ *
+ * Bit-perfect output bypasses crossfade, playback speed, skip silence and
+ * software volume: any of them would change the samples. Volume belongs to
+ * the DAC. See [com.ghostmikz.ghostly.playback.bitperfect.BitPerfectOutput].
+ */
+enum class BitPerfectMode {
+    OFF,
+
+    /** BitChord's own USB Audio Class driver on libusb: any Android version, volume set on the DAC. */
+    USB_DIRECT,
+
+    /** An AAudio exclusive stream to a built-in DAC, for digital audio players. */
+    DAP_EXCLUSIVE,
+
+    /** Android 14's bit-perfect mixer for a USB DAC. */
+    USB_ANDROID,
+}
+
 /** Small settings store shared by the UI and the playback service. */
 object Prefs {
     private lateinit var sp: SharedPreferences
@@ -87,6 +135,24 @@ object Prefs {
     val skipSilenceOn = BoolPref("skip_silence", false)
     /** BitChord's crossfade, in whole seconds; 0 is off (the default). */
     val crossfadeSeconds = IntPref("crossfade_seconds", 0)
+    // Audio output, as BitChord's AppSettings
+    val outputPcmMode = EnumPref("output_pcm_mode", OutputPcmMode.PCM_16, OutputPcmMode.entries)
+    /** Prefer an attached USB audio output over the system's normal route. */
+    val preferUsbDac = BoolPref("prefer_usb_dac", false)
+    /** Unprocessed output to a DAC; see [BitPerfectMode]. */
+    val bitPerfectMode = EnumPref("bit_perfect_mode", BitPerfectMode.OFF, BitPerfectMode.entries)
+    /**
+     * Lets direct USB play to a DAC with no volume control Ghostly can set: full
+     * scale, with the DAC's own knob (if any) the only volume. Off unless the
+     * listener accepts a second warning.
+     */
+    val usbAllowFixedVolume = BoolPref("usb_allow_fixed_volume", false)
+    /**
+     * Lets the exclusive output convert a track its DAC can't take as it is, to
+     * the DAC's highest format. Off, such a track goes to normal output and no
+     * sample on the exclusive path is ever changed.
+     */
+    val convertForLimitedDac = BoolPref("convert_for_limited_dac", false)
     // Appearance
     val reduceAnimation = BoolPref("reduce_animation", false)
     val reduceBlur = BoolPref("reduce_blur", false)
@@ -109,7 +175,9 @@ object Prefs {
     private val all = listOf(
         lastfmEnabled, scrobbleOn, nowPlayingOn, lastfmPrimaryArtistOnly, skipSilenceOn, reduceAnimation, reduceBlur, noBlend, fullCover, fullAlbumCover,
         liquidGlass, glassPerformance, filterNonMusic, swipePlayNext, stopOnClose, hideVolume, hideStatusBar, queueHistory, hideSongStatus, nerdStats,
+        preferUsbDac, usbAllowFixedVolume, convertForLimitedDac,
     )
+    private val choices = listOf(outputPcmMode, bitPerfectMode)
 
     private val numbers = listOf(scrobbleMinDuration, scrobbleDelaySeconds, crossfadeSeconds)
     private val floats = listOf(scrobbleDelayPercent)
@@ -162,6 +230,7 @@ object Prefs {
         all.forEach { it.load(sp) }
         numbers.forEach { it.load(sp) }
         floats.forEach { it.load(sp) }
+        choices.forEach { it.load(sp) }
         if (!scrobbleOn.value && nowPlayingOn.value) nowPlayingOn.set(false)
         LastFM.sessionKey = account.getString("lastfm_session", null)?.takeIf { it.isNotBlank() }
     }
@@ -187,7 +256,7 @@ object Prefs {
     /** Settings as JSON for "Export data". The Last.fm session is left out on purpose. */
     fun exportJson(): JSONObject {
         val o = JSONObject()
-        sp.all.forEach { (k, v) -> if ((v is Boolean || v is Int || v is Float || k == "theme" || k == "local_music_sort") && !k.startsWith("lastfm_user") && !k.startsWith("lastfm_session")) o.put(k, v) }
+        sp.all.forEach { (k, v) -> if ((v is Boolean || v is Int || v is Float || k == "theme" || k == "local_music_sort" || k == "output_pcm_mode") && !k.startsWith("lastfm_user") && !k.startsWith("lastfm_session")) o.put(k, v) }
         return o
     }
 
@@ -197,7 +266,7 @@ object Prefs {
                 when {
                     k.startsWith("lastfm_user") || k.startsWith("lastfm_session") -> Unit
                     k == "theme" -> putString(k, o.optString(k, "system"))
-                    k == "local_music_sort" -> putString(k, o.optString(k))
+                    k == "local_music_sort" || k == "output_pcm_mode" -> putString(k, o.optString(k))
                     k == "scrobble_delay_percent" -> putFloat(k, o.optDouble(k, 0.5).toFloat())
                     o.opt(k) is Int -> putInt(k, o.optInt(k))
                     else -> putBoolean(k, o.optBoolean(k))

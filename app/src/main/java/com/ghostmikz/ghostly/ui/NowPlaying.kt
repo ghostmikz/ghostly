@@ -436,10 +436,13 @@ private fun VolumeBar() {
     val max = remember { audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1) }
     var vol by remember { mutableFloatStateOf(audio.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat() / max) }
     var touching by remember { mutableStateOf(false) }
+    // On direct USB output the DAC's own attenuator is the volume (BitChord):
+    // the music stream no longer reaches it, so the phone's volume would do nothing.
+    val dac by com.ghostmikz.ghostly.playback.bitperfect.DacVolume.level.collectAsState()
     // Follow the hardware volume buttons too.
-    LaunchedEffect(Unit) {
+    LaunchedEffect(dac) {
         while (true) {
-            if (!touching) vol = audio.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat() / max
+            if (!touching) vol = dac ?: (audio.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat() / max)
             delay(400)
         }
     }
@@ -450,7 +453,11 @@ private fun VolumeBar() {
             {
                 touching = true
                 vol = it
-                audio.setStreamVolume(AudioManager.STREAM_MUSIC, Math.round(it * max), 0)
+                if (dac != null) {
+                    com.ghostmikz.ghostly.playback.bitperfect.DacVolume.set(it)
+                } else {
+                    audio.setStreamVolume(AudioManager.STREAM_MUSIC, Math.round(it * max), 0)
+                }
             },
             { touching = false },
             Modifier.weight(1f).padding(horizontal = 12.dp),

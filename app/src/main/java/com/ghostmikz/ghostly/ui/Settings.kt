@@ -5,7 +5,6 @@ import kotlin.math.roundToInt
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.foundation.interaction.collectIsPressedAsState
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.foundation.text.KeyboardActions
@@ -23,6 +22,17 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Usb
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.VolumeUp
+import android.media.AudioFormat
+import android.os.Build
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.ui.draw.alpha
+import com.ghostmikz.ghostly.data.BitPerfectMode
+import com.ghostmikz.ghostly.data.OutputPcmMode
+import com.ghostmikz.ghostly.playback.OutputStatus
+import com.ghostmikz.ghostly.playback.bitperfect.BitPerfectOutput
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.LibraryMusic
 import androidx.compose.material.icons.outlined.Person
@@ -141,7 +151,7 @@ private fun MainPage(songCount: Int, open: (Page) -> Unit) {
     data class Entry(val icon: ImageVector, val title: String, val words: String, val page: Page)
     val entries = listOf(
         Entry(Icons.Outlined.Person, "Account & integrations", "last.fm lastfm scrobble scrobbling now playing sign in account", Page.Account),
-        Entry(Icons.Outlined.PlayCircle, "Playback", "skip silence equalizer eq bass audio", Page.Playback),
+        Entry(Icons.Outlined.PlayCircle, "Playback", "skip silence equalizer eq bass audio crossfade output precision pcm bit depth float 16-bit 32-bit sample rate usb dac bit-perfect bitperfect exclusive hi-res volume convert", Page.Playback),
         Entry(Icons.Outlined.Brush, "Appearance", "liquid glass glass performance theme dark mode light mode system reduce animation blur blend colors full-screen cover art album", Page.Appearance),
         Entry(Icons.Outlined.LibraryMusic, "Local Music", "rescan scan library songs folders filter non-music recordings wav", Page.Local),
         Entry(Icons.Outlined.Storage, "Storage", "clear image cache artwork space", Page.Storage),
@@ -251,16 +261,30 @@ private fun AccountPage() {
 @Composable
 private fun PlaybackPage() {
     val context = LocalContext.current
+    // With bit-perfect output ready, what would change the samples is faded and
+    // bypassed (BitChord's BypassedByBitPerfect).
+    val bitPerfectReady by BitPerfectOutput.ready.collectAsState()
+    val output by OutputStatus.current.collectAsState()
     Spacer(Modifier.height(12.dp))
+    OutputCard()
+    if (bitPerfectReady) Note(BIT_PERFECT_BYPASSED)
+    Spacer(Modifier.height(20.dp))
     Card {
-        PrefRow(Icons.Outlined.VolumeOff, "Skip silence", "Trim gaps longer than a second", Prefs.skipSilenceOn)
+        Bypassed(bitPerfectReady) {
+            // Media3's float path drops the silence skipper (BitChord says so too).
+            val onFloat = output.encoding == AudioFormat.ENCODING_PCM_FLOAT
+            PrefRow(Icons.Outlined.VolumeOff, "Skip silence",
+                if (onFloat) "Unavailable on 32-bit float output" else "Trim gaps longer than a second", Prefs.skipSilenceOn)
+        }
         // BitChord's crossfade row: 0 to 12 seconds, a step a second, "Off" at 0.
         val crossfade by Prefs.crossfadeSeconds.state.collectAsState()
-        SliderRow(
-            Icons.Rounded.Waves, "Crossfade", "Blends one track into the next",
-            if (crossfade == 0) "Off" else "${crossfade}s", crossfade.toFloat(),
-            { Prefs.crossfadeSeconds.set(it.roundToInt()) }, 0f..12f, 11,
-        )
+        Bypassed(bitPerfectReady) {
+            SliderRow(
+                Icons.Rounded.Waves, "Crossfade", "Blends one track into the next",
+                if (crossfade == 0) "Off" else "${crossfade}s", crossfade.toFloat(),
+                { Prefs.crossfadeSeconds.set(it.roundToInt()) }, 0f..12f, 11,
+            )
+        }
         NavRow(Icons.Outlined.Equalizer, "Equalizer", "Tone and bands, from your phone's equalizer", last = true) {
             val opened = runCatching {
                 context.startActivity(
@@ -435,6 +459,200 @@ private fun DataPage() {
             onConfirm = { History.clearHistory(); ask = null }, onDismiss = { ask = null })
         "favorites" -> Confirm("Clear liked songs?", "Liked is emptied. Your other playlists stay.", "Clear",
             onConfirm = { History.clearFavorites(); ask = null }, onDismiss = { ask = null })
+    }
+}
+
+// ---------- audio output (BitChord's Playback group) ----------
+
+private const val BIT_PERFECT_BYPASSED = "Bit-perfect output is ready, so the faded settings are bypassed. " +
+    "They work again when the DAC is disconnected or the mode is off."
+
+@Composable
+private fun OutputCard() {
+    val status by OutputStatus.current.collectAsState()
+    val pcm by Prefs.outputPcmMode.state.collectAsState()
+    val preferUsb by Prefs.preferUsbDac.state.collectAsState()
+    val mode by Prefs.bitPerfectMode.state.collectAsState()
+    val bitPerfect by BitPerfectOutput.status.collectAsState()
+    val dacVolume by BitPerfectOutput.hardwareVolume.collectAsState()
+    val allowFixed by Prefs.usbAllowFixedVolume.state.collectAsState()
+    val convert by Prefs.convertForLimitedDac.state.collectAsState()
+    var picking by remember { mutableStateOf(false) }
+    var confirmMode by remember { mutableStateOf<BitPerfectMode?>(null) }
+    var confirmFixed by remember { mutableStateOf(false) }
+
+    val showVolume = dacVolume?.takeIf { it.available }
+    val showFixed = mode == BitPerfectMode.USB_DIRECT
+    val showConvert = mode != BitPerfectMode.OFF && mode.isSupported
+
+    Card {
+        Row(Modifier.fillMaxWidth().padding(top = 13.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Rounded.GraphicEq, null, tint = GhostlyColors.Text, modifier = Modifier.padding(start = 20.dp).size(26.dp))
+            Column(Modifier.weight(1f).padding(start = 18.dp, end = 18.dp)) {
+                Text("Output precision", color = GhostlyColors.Text, fontSize = 18.sp)
+                Text(
+                    buildString {
+                        append(status.sink)
+                        append(" · ")
+                        append(status.deviceName)
+                        status.sampleRateHz?.let { append(" · ${it / 1000.0} kHz") }
+                        append(" · ")
+                        append(OutputStatus.encodingLabel(status))
+                    },
+                    color = GhostlyColors.TextSecondary, fontSize = 15.sp,
+                )
+            }
+        }
+        SegmentedTabs(
+            OutputPcmMode.entries.map(OutputPcmMode::label), OutputPcmMode.entries.indexOf(pcm),
+            { Prefs.outputPcmMode.set(OutputPcmMode.entries[it]) },
+            Modifier.padding(top = 12.dp, bottom = 14.dp), container = GhostlyColors.CardHigh,
+        )
+        HorizontalDivider(thickness = 0.5.dp, color = GhostlyColors.CardHigh, modifier = Modifier.padding(start = 64.dp))
+        SwitchRow(Icons.Outlined.Usb, "Prefer USB DAC", if (status.isUsb) "Connected" else null, checked = preferUsb) {
+            Prefs.preferUsbDac.set(it)
+        }
+        // The mode and the device it names can both be long, so they go under
+        // the title rather than beside it.
+        Row(Modifier.fillMaxWidth().clickable { picking = true }, verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Outlined.Usb, null, tint = GhostlyColors.Text, modifier = Modifier.padding(start = 20.dp).size(26.dp))
+            Column(Modifier.weight(1f).padding(start = 18.dp)) {
+                Row(Modifier.padding(vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Bit-perfect output", color = GhostlyColors.Text, fontSize = 18.sp)
+                        Text(bitPerfectSubtitle(mode, bitPerfect), color = GhostlyColors.TextSecondary, fontSize = 15.sp)
+                        Text(mode.label, color = GhostlyColors.Accent, fontSize = 15.sp, fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(top = 2.dp))
+                    }
+                    Icon(BitChordIcons.ChevronRight, null, tint = GhostlyColors.TextSecondary,
+                        modifier = Modifier.padding(start = 10.dp).size(16.dp))
+                    Spacer(Modifier.width(18.dp))
+                }
+                if (showVolume != null || showFixed || showConvert) HorizontalDivider(thickness = 0.5.dp, color = GhostlyColors.CardHigh)
+            }
+        }
+        // The DAC's own attenuator: the only volume direct USB has, since nothing
+        // upstream may scale a sample.
+        showVolume?.let { volume ->
+            SliderRow(
+                Icons.Rounded.VolumeUp, "DAC volume", "Set on the DAC itself; the music is not scaled",
+                "%.1f dB".format(volume.currentDb), volume.currentDb.toFloat(),
+                { BitPerfectOutput.setHardwareVolume(it.toDouble()) },
+                volume.minDb.toFloat()..volume.maxDb.toFloat(), 0, last = !showFixed && !showConvert,
+            )
+        }
+        if (showFixed) {
+            SwitchRow(Icons.Rounded.VolumeUp, "Allow DACs without volume control", "Otherwise such a DAC plays through normal output",
+                checked = allowFixed, last = !showConvert) { on ->
+                if (on) confirmFixed = true else Prefs.usbAllowFixedVolume.set(false)
+            }
+        }
+        if (showConvert) {
+            SwitchRow(Icons.Rounded.Tune, "Convert for lower-spec DACs",
+                "Converts tracks above your DAC's limit to its highest format. Tracks may take longer to start and won't be bit-perfect to the original.",
+                checked = convert, last = true) { Prefs.convertForLimitedDac.set(it) }
+        }
+    }
+
+    if (picking) BitPerfectModePicker(mode, onDismiss = { picking = false }) { chosen ->
+        picking = false
+        // Off applies at once; any other mode asks first (BitChord).
+        if (chosen == BitPerfectMode.OFF) Prefs.bitPerfectMode.set(chosen) else if (chosen != mode) confirmMode = chosen
+    }
+    confirmMode?.let { chosen ->
+        Confirm("Turn on bit-perfect output?",
+            "The DAC gets the music at full scale, and the phone's volume buttons may stop working. Turn the DAC or amplifier down before you play.",
+            "Enable", onConfirm = { Prefs.bitPerfectMode.set(chosen); confirmMode = null }, onDismiss = { confirmMode = null })
+    }
+    if (confirmFixed) {
+        Confirm("Play at full scale?",
+            "Ghostly can't set this kind of DAC's volume, so it plays at full scale and only the DAC's own knob, if it has one, controls loudness. This can be dangerously loud with sensitive headphones.",
+            "Allow", onConfirm = { Prefs.usbAllowFixedVolume.set(true); confirmFixed = false }, onDismiss = { confirmFixed = false })
+    }
+}
+
+/** BitChord's bit-perfect choice sheet: every mode, the ones this phone can't use greyed out. */
+@Composable
+private fun BitPerfectModePicker(current: BitPerfectMode, onDismiss: () -> Unit, onPick: (BitPerfectMode) -> Unit) {
+    // Listed in BitChord's order: Off, USB DAC (direct driver), Built-in DAC, USB DAC.
+    AlertDialog(
+        onDismissRequest = onDismiss, containerColor = GhostlyColors.Card,
+        title = { Text("Bit-perfect output", color = GhostlyColors.Text) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                BitPerfectMode.entries.forEach { option ->
+                    val enabled = option.isSupported
+                    Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                            .clickable(enabled = enabled) { onPick(option) }
+                            .alpha(if (enabled) 1f else 0.4f).padding(vertical = 10.dp, horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(option.label, color = GhostlyColors.Text, fontSize = 17.sp)
+                            Text(option.description, color = GhostlyColors.TextSecondary, fontSize = 14.sp, lineHeight = 18.sp)
+                        }
+                        if (option == current) Icon(Icons.Rounded.Check, null, tint = GhostlyColors.Accent,
+                            modifier = Modifier.padding(start = 12.dp).size(22.dp))
+                    }
+                }
+                Text(
+                    "Sends the track to the DAC unchanged. Crossfade, skip silence, playback speed and Ghostly's volume are bypassed.",
+                    color = GhostlyColors.TextSecondary, fontSize = 13.sp, lineHeight = 17.sp, modifier = Modifier.padding(top = 10.dp),
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Done", color = GhostlyColors.Accent, fontWeight = FontWeight.SemiBold) } },
+    )
+}
+
+private val BitPerfectMode.label: String
+    get() = when (this) {
+        BitPerfectMode.OFF -> "Off"
+        BitPerfectMode.USB_ANDROID -> "USB DAC"
+        BitPerfectMode.DAP_EXCLUSIVE -> "Built-in DAC (AAudio exclusive)"
+        BitPerfectMode.USB_DIRECT -> "USB DAC (direct driver)"
+    }
+
+/** Whether this phone can use the mode at all, independent of what is plugged in. */
+private val BitPerfectMode.isSupported: Boolean
+    get() = when (this) {
+        BitPerfectMode.OFF -> true
+        BitPerfectMode.USB_ANDROID -> Build.VERSION.SDK_INT >= 34
+        BitPerfectMode.DAP_EXCLUSIVE -> Build.VERSION.SDK_INT >= 27
+        BitPerfectMode.USB_DIRECT -> true
+    }
+
+private val BitPerfectMode.description: String
+    get() = when {
+        this == BitPerfectMode.USB_ANDROID && !isSupported -> "Requires Android 14 or later"
+        this == BitPerfectMode.DAP_EXCLUSIVE && !isSupported -> "Requires Android 8.1 or later"
+        this == BitPerfectMode.OFF -> "Audio goes through Android's mixer and Ghostly's effects."
+        this == BitPerfectMode.USB_ANDROID -> "Android 14 opens the DAC at each track's own rate and bit depth, without mixing or resampling."
+        this == BitPerfectMode.USB_DIRECT -> "Ghostly drives the DAC itself, on any Android version, and sets its volume on the DAC. Asks for USB permission. Can be much louder than normal output."
+        else -> "For music players with their own DAC. Opens the headphone or line output exclusively at each track's own rate. Not every device grants exclusive mode."
+    }
+
+/**
+ * What the exclusive output is doing now, rather than what was asked of it: a
+ * mode can be on while the playing track still goes through the mixer.
+ */
+private fun bitPerfectSubtitle(mode: BitPerfectMode, status: BitPerfectOutput.Status): String = when {
+    mode == BitPerfectMode.OFF || !mode.isSupported -> mode.description
+    status.active && status.dacLimited ->
+        "${status.deviceName.orEmpty()} · ${"%.1f".format(status.sampleRateHz / 1000.0)} kHz · ${status.outputBits}-bit · DAC max, converted from this track's format"
+    status.active && !status.exact -> "${status.deviceName.orEmpty()} · not exact: this source isn't lossless PCM"
+    status.active -> "${status.deviceName.orEmpty()} · ${"%.1f".format(status.sampleRateHz / 1000.0)} kHz · ${status.outputBits}-bit"
+    status.fallbackReason != null -> "Not available for this track (${status.fallbackReason})"
+    else -> "Waiting for a lossless track on a supported output"
+}
+
+/** Faded and untouchable while bit-perfect output is ready (BitChord's BypassedByBitPerfect). */
+@Composable
+private fun Bypassed(on: Boolean, content: @Composable () -> Unit) {
+    Box(if (on) Modifier.alpha(0.4f) else Modifier) {
+        content()
+        if (on) Box(Modifier.matchParentSize().clickable(remember { MutableInteractionSource() }, null) {})
     }
 }
 

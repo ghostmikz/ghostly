@@ -11,6 +11,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import com.ghostmikz.ghostly.data.Prefs
+import com.ghostmikz.ghostly.playback.bitperfect.BitPerfectOutput
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -520,7 +521,10 @@ class CrossfadeController(
         player.volume = 1f
     }
 
-    private fun configuredFadeMs(): Long = Prefs.crossfadeSeconds.value * 1000L
+    // Bit-perfect output carries one stream to the DAC, unchanged. A blend needs
+    // two, with gain on both, so the queue plays gapless instead (BitChord).
+    private fun configuredFadeMs(): Long =
+        if (BitPerfectOutput.status.value.active) 0L else Prefs.crossfadeSeconds.value * 1000L
 
     /** Never more than a third of the track. */
     private fun fadeFor(duration: Long): Long {

@@ -1,0 +1,5 @@
+{
+    global:
+        Java_com_ghostmikz_ghostly_playback_bitperfect_*;
+    local: *;
+};

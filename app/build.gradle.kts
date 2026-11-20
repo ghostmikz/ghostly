@@ -29,6 +29,16 @@ android {
         versionName = "0.1.0"
         buildConfigField("String", "LASTFM_API_KEY", "\"${prop("LASTFM_API_KEY")}\"")
         buildConfigField("String", "LASTFM_SECRET", "\"${prop("LASTFM_SECRET")}\"")
+        // The bit-perfect drivers' native code: phones (ARM) and the x86_64 emulator.
+        ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86_64") }
+    }
+
+    ndkVersion = "27.0.12077973"
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     // The release key lives outside the repo; its path and passwords come from

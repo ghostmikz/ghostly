@@ -1,14 +1,41 @@
 package com.ghostmikz.ghostly.playback
 
+import android.annotation.SuppressLint
 import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
 import android.media.audiofx.AudioEffect
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.DeviceInfo
+import androidx.media3.common.FlagSet
 import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
+import androidx.media3.common.audio.AudioProcessor
+import androidx.media3.common.audio.SonicAudioProcessor
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioSink
+import androidx.media3.exoplayer.audio.SilenceSkippingAudioProcessor
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
+import com.ghostmikz.ghostly.data.BitPerfectMode
+import com.ghostmikz.ghostly.data.OutputPcmMode
+import com.ghostmikz.ghostly.playback.bitperfect.BitPerfectAudioSink
+import com.ghostmikz.ghostly.playback.bitperfect.BitPerfectOutput
+import com.ghostmikz.ghostly.playback.bitperfect.BitPerfectRoutingSink
+import com.ghostmikz.ghostly.playback.bitperfect.DacVolume
+import com.ghostmikz.ghostly.playback.bitperfect.usb.UsbDirectDevices
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.drop
+import kotlin.math.roundToInt
 import androidx.media3.session.MediaSession
 import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaLibraryService
@@ -49,6 +76,7 @@ const val ACTION_TOGGLE_FAVORITE = "com.ghostmikz.ghostly.action.TOGGLE_FAVORITE
 const val ACTION_TOGGLE_SHUFFLE = "com.ghostmikz.ghostly.action.TOGGLE_SHUFFLE"
 
 /** Plays music in the background, owns the notification / lock-screen controls and Last.fm scrobbling. */
+@SuppressLint("UnsafeOptInUsageError")
 class PlaybackService : MediaLibraryService() {
     private var session: MediaLibrarySession? = null
     /** What Android Auto browses (BitChord's MediaLibraryCallback tree). */
@@ -65,6 +93,20 @@ class PlaybackService : MediaLibraryService() {
     private var crossfade: CrossfadeController? = null
     private lateinit var playbackListener: Player.Listener // has the current track been added to History yet
 
+    private val audioManager by lazy { getSystemService(AudioManager::class.java) }
+    /**
+     * Whether the players' sinks were built for a float AudioTrack (BitChord).
+     * Media3 fixes it when a player is built, so a change rebuilds both.
+     */
+    private var configuredFloatOutput = false
+    private var outputReconfigureJob: Job? = null
+    /** Each player's last opened AudioTrack, for the Output precision row. */
+    private val trackConfigs = java.util.WeakHashMap<ExoPlayer, AudioSink.AudioTrackConfig>()
+    private val outputDeviceCallback = object : AudioDeviceCallback() {
+        override fun onAudioDevicesAdded(addedDevices: Array<AudioDeviceInfo>) = requestOutputReconfiguration()
+        override fun onAudioDevicesRemoved(removedDevices: Array<AudioDeviceInfo>) = requestOutputReconfiguration()
+    }
+
     override fun onCreate() {
         super.onCreate()
         Prefs.init(this)
@@ -77,6 +119,7 @@ class PlaybackService : MediaLibraryService() {
         // track fades in on (see CrossfadeController). They share one audio session,
         // so the system equalizer doesn't jump at a handoff, and only the session's
         // player takes audio focus and pauses on unplugged headphones.
+        configuredFloatOutput = shouldEnableFloatOutput()
         player = buildPlayer(owns = true)
         spare = buildPlayer(owns = false)
         spare.setAudioSessionId(player.audioSessionId)
@@ -206,6 +249,7 @@ class PlaybackService : MediaLibraryService() {
 
         // Follow the "Skip silence" setting live.
         scope.launch { Prefs.skipSilence.collect { player.skipSilenceEnabled = it; spare.skipSilenceEnabled = it } }
+        observeOutputSettings()
 
         // Let the phone's equalizer (if it has one) attach to our audio.
         audioSessionId = player.audioSessionId
@@ -221,13 +265,12 @@ class PlaybackService : MediaLibraryService() {
             Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        val fader = CrossfadeController(scope, { player }, { spare }, ::adoptPlayer).also { it.start() }
-        // A shuffle toggled as the next track becomes imminent keeps that track in place.
-        QueueShuffle.isCrossfadeTransitioning = fader::isTransitioning
-        crossfade = fader
+        val fader = newCrossfade()
         session = MediaLibrarySession.Builder(this, SessionPlayer(player, fader), LibraryCallback())
             .setSessionActivity(openApp)
             .build()
+
+        applyOutputRoute()
 
         // A widget tap after the process died binds a fresh service: give it the last queue.
         scope.launch {
@@ -240,11 +283,236 @@ class PlaybackService : MediaLibraryService() {
         scope.launch { History.favorites.collect { publishWidgetState() } }
     }
 
-    private fun buildPlayer(owns: Boolean): ExoPlayer = ExoPlayer.Builder(this)
+    private fun buildPlayer(owns: Boolean): ExoPlayer = ExoPlayer.Builder(this, renderers())
         .setAudioAttributes(AUDIO_ATTRIBUTES, /* handleAudioFocus = */ owns)
         .setHandleAudioBecomingNoisy(owns) // pause when headphones are unplugged
         .setWakeMode(C.WAKE_MODE_LOCAL)
         .build()
+        .also { built ->
+            built.addAnalyticsListener(object : AnalyticsListener {
+                override fun onAudioTrackInitialized(eventTime: AnalyticsListener.EventTime, audioTrackConfig: AudioSink.AudioTrackConfig) {
+                    trackConfigs[built] = audioTrackConfig
+                    if (built === player) publishOutputStatus()
+                }
+            })
+        }
+
+    private fun newCrossfade(): CrossfadeController {
+        val fader = CrossfadeController(scope, { player }, { spare }, ::adoptPlayer).also { it.start() }
+        // A shuffle toggled as the next track becomes imminent keeps that track in place.
+        QueueShuffle.isCrossfadeTransitioning = fader::isTransitioning
+        crossfade = fader
+        return fader
+    }
+
+    /**
+     * BitChord's renderers: float output only where [shouldEnableFloatOutput]
+     * allows it, a silence skipper that leaves pauses under a second alone, and
+     * in front of it all the bit-perfect sink, which takes the tracks the
+     * selected exclusive output can carry unchanged.
+     */
+    private fun renderers() = object : DefaultRenderersFactory(this) {
+        init {
+            // Float is what *preserves* a hi-res source rather than what
+            // embellishes it: it is the only AudioTrack encoding Media3 will open
+            // that carries a 24-bit sample intact.
+            setEnableAudioFloatOutput(configuredFloatOutput)
+            // c2.sec.flac.decoder produces one extra 232.2ms timestamp advance per
+            // decoded buffer when Media3 requests float PCM, so FLAC goes through
+            // the platform software codec on affected Samsung devices.
+            setMediaCodecSelector { mimeType, requiresSecureDecoder, requiresTunnelingDecoder ->
+                val selector = if (mimeType == MimeTypes.AUDIO_FLAC) MediaCodecSelector.PREFER_SOFTWARE else MediaCodecSelector.DEFAULT
+                val candidates = selector.getDecoderInfos(mimeType, requiresSecureDecoder, requiresTunnelingDecoder)
+                if (mimeType == MimeTypes.AUDIO_FLAC) {
+                    candidates.filterNot { AudioOutputPolicy.isUnsafeFloatFlacDecoder(it.name) }
+                } else {
+                    candidates
+                }
+            }
+        }
+
+        override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioTrackPlaybackParams: Boolean): AudioSink {
+            val normal = DefaultAudioSink.Builder(context)
+                .setEnableFloatOutput(enableFloatOutput)
+                // Media3's float branch drops Sonic, so speed is done by the
+                // AudioTrack itself there. Silence skipping is in that same dropped
+                // chain and has no such escape hatch: on float it does nothing.
+                .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams || enableFloatOutput)
+                .setAudioProcessorChain(
+                    DefaultAudioSink.DefaultAudioProcessorChain(
+                        emptyArray<AudioProcessor>(),
+                        SilenceSkippingAudioProcessor(
+                            MIN_SILENCE_US,
+                            SilenceSkippingAudioProcessor.DEFAULT_SILENCE_RETENTION_RATIO,
+                            SilenceSkippingAudioProcessor.DEFAULT_MAX_SILENCE_TO_KEEP_DURATION_US,
+                            SilenceSkippingAudioProcessor.DEFAULT_MIN_VOLUME_TO_KEEP_PERCENTAGE,
+                            SilenceSkippingAudioProcessor.DEFAULT_SILENCE_THRESHOLD_LEVEL,
+                        ),
+                        SonicAudioProcessor(),
+                    ),
+                )
+                .build()
+            return BitPerfectRoutingSink(normal, BitPerfectAudioSink(BitPerfectOutput.forContext(context)))
+        }
+    }
+
+    /** The output the music goes to: a USB DAC when preferred and attached, else Android's choice. */
+    private fun activeOutputDevice(): AudioDeviceInfo? {
+        val manager = audioManager ?: return null
+        return AudioRoute.usbOutput(manager).takeIf { Prefs.preferUsbDac.value } ?: AudioRoute.systemDefault(manager)
+    }
+
+    private fun shouldEnableFloatOutput(): Boolean {
+        val device = activeOutputDevice()
+        val kind = device?.let { AudioRoute.kindOf(it.type) } ?: AudioRoute.Kind.PHONE
+        return AudioOutputPolicy.shouldUseFloatOutput(Prefs.outputPcmMode.value, kind, AudioRoute.takesFloat(device))
+    }
+
+    /**
+     * The USB-DAC preference through Android's public routing API (BitChord). This
+     * does not bypass the system USB driver: Android still opens only formats the
+     * DAC advertises.
+     */
+    private fun applyOutputRoute() {
+        val manager = audioManager ?: return
+        val preferred = AudioRoute.usbOutput(manager).takeIf { Prefs.preferUsbDac.value }
+        player.setPreferredAudioDevice(preferred)
+        spare.setPreferredAudioDevice(preferred)
+        publishOutputStatus()
+    }
+
+    private fun publishOutputStatus() {
+        val device = activeOutputDevice()
+        val config = trackConfigs[player]
+        val requested = Prefs.outputPcmMode.value
+        OutputStatus.update {
+            OutputStatus.Snapshot(
+                deviceName = AudioRoute.label(device),
+                isUsb = device?.let { d -> AudioRoute.kindOf(d.type) } == AudioRoute.Kind.USB,
+                sampleRateHz = config?.sampleRate,
+                encoding = config?.encoding,
+                requested = requested,
+                floatFallback = requested == OutputPcmMode.FLOAT_32 && !configuredFloatOutput,
+            )
+        }
+    }
+
+    private fun requestOutputReconfiguration(rebuild: Boolean = false) {
+        outputReconfigureJob?.cancel()
+        outputReconfigureJob = scope.launch {
+            // Replacing two renderers during a blend would cut one half of it.
+            // Wait for the short transition to settle, then swap the engine.
+            while (crossfade?.isTransitioning() == true) delay(50)
+            val requestedFloat = shouldEnableFloatOutput()
+            if (requestedFloat == configuredFloatOutput && !rebuild) {
+                applyOutputRoute()
+            } else {
+                rebuildPlayersForOutput(requestedFloat)
+            }
+        }
+    }
+
+    /**
+     * Rebuilds Media3's fixed AudioSink setup without restarting the service
+     * (BitChord). Queue, item, position and play state move to the new player; the
+     * old AudioTrack is released only after the session points at the new one.
+     */
+    private fun rebuildPlayersForOutput(enableFloat: Boolean) {
+        val oldActive = player
+        val oldSpare = spare
+        val items = List(oldActive.mediaItemCount) { oldActive.getMediaItemAt(it) }
+        val index = oldActive.currentMediaItemIndex.takeIf { it != C.INDEX_UNSET } ?: 0
+        val position = oldActive.currentPosition.coerceAtLeast(0L)
+        val playWhenReady = oldActive.playWhenReady
+        val repeatMode = oldActive.repeatMode
+        val oldSessionId = oldActive.audioSessionId
+
+        oldActive.playWhenReady = false
+        crossfade?.release()
+        oldActive.removeListener(playbackListener)
+
+        configuredFloatOutput = enableFloat
+        val newActive = buildPlayer(owns = true)
+        val newSpare = buildPlayer(owns = false)
+        newSpare.setAudioSessionId(newActive.audioSessionId)
+        player = newActive
+        spare = newSpare
+        newActive.skipSilenceEnabled = Prefs.skipSilence.value
+        newSpare.skipSilenceEnabled = Prefs.skipSilence.value
+        newActive.repeatMode = repeatMode
+        if (items.isNotEmpty()) newActive.setMediaItems(items, index.coerceIn(items.indices), position)
+        newActive.addListener(playbackListener)
+
+        val fader = newCrossfade()
+        session?.player = SessionPlayer(newActive, fader)
+        applyOutputRoute()
+        if (items.isNotEmpty()) newActive.prepare()
+        newActive.playWhenReady = playWhenReady
+
+        oldActive.release()
+        oldSpare.release()
+        // The phone's equalizer follows the new audio session.
+        sendBroadcast(
+            Intent(AudioEffect.ACTION_CLOSE_AUDIO_EFFECT_CONTROL_SESSION)
+                .putExtra(AudioEffect.EXTRA_AUDIO_SESSION, oldSessionId)
+                .putExtra(AudioEffect.EXTRA_PACKAGE_NAME, packageName),
+        )
+        audioSessionId = newActive.audioSessionId
+        sendBroadcast(
+            Intent(AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION)
+                .putExtra(AudioEffect.EXTRA_AUDIO_SESSION, newActive.audioSessionId)
+                .putExtra(AudioEffect.EXTRA_PACKAGE_NAME, packageName)
+                .putExtra(AudioEffect.EXTRA_CONTENT_TYPE, AudioEffect.CONTENT_TYPE_MUSIC),
+        )
+    }
+
+    /** BitChord's observeSettings, for the output rows. */
+    private fun observeOutputSettings() {
+        audioManager?.registerAudioDeviceCallback(outputDeviceCallback, null)
+        scope.launch { Prefs.preferUsbDac.state.drop(1).collect { requestOutputReconfiguration() } }
+        scope.launch { Prefs.outputPcmMode.state.drop(1).collect { requestOutputReconfiguration() } }
+        // Direct USB needs Android's permission to the DAC, asked for when the
+        // mode is chosen and again whenever a DAC is attached; an answer, an
+        // attach or a detach all send the playing track back to be re-routed.
+        UsbDirectDevices.init(this)
+        BitPerfectOutput.watch(this)
+        scope.launch {
+            var available = false
+            DacVolume.level.collect { level ->
+                val now = level != null
+                (session?.player as? SessionPlayer)?.onDacVolumeChanged(routeChanged = now != available)
+                available = now
+            }
+        }
+        UsbDirectDevices.onChanged = {
+            BitPerfectOutput.refreshReady(this)
+            scope.launch {
+                if (Prefs.bitPerfectMode.value == BitPerfectMode.USB_DIRECT) {
+                    UsbDirectDevices.requestPermission(this@PlaybackService)
+                    requestOutputReconfiguration(rebuild = true)
+                }
+            }
+        }
+        scope.launch {
+            // The sinks decide per format, so the playing track only moves on or
+            // off the exclusive output when its sink is configured again.
+            Prefs.bitPerfectMode.state.collect { mode ->
+                BitPerfectOutput.refreshReady(this@PlaybackService)
+                if (mode == BitPerfectMode.USB_DIRECT) UsbDirectDevices.requestPermission(this@PlaybackService)
+            }
+        }
+        scope.launch { Prefs.bitPerfectMode.state.drop(1).collect { requestOutputReconfiguration(rebuild = true) } }
+        scope.launch {
+            Prefs.usbAllowFixedVolume.state.drop(1).collect {
+                if (Prefs.bitPerfectMode.value == BitPerfectMode.USB_DIRECT) requestOutputReconfiguration(rebuild = true)
+            }
+        }
+        scope.launch {
+            Prefs.convertForLimitedDac.state.drop(1).collect {
+                if (Prefs.bitPerfectMode.value != BitPerfectMode.OFF) requestOutputReconfiguration(rebuild = true)
+            }
+        }
+    }
 
     private fun setSessionOwner(target: ExoPlayer, owns: Boolean) {
         target.setAudioAttributes(AUDIO_ATTRIBUTES, /* handleAudioFocus = */ owns)
@@ -275,6 +543,93 @@ class PlaybackService : MediaLibraryService() {
      * progress — a manual skip never crossfades (BitChord's SessionPlayer).
      */
     private class SessionPlayer(player: Player, private val crossfade: CrossfadeController) : ForwardingPlayer(player) {
+        private val listeners = java.util.concurrent.CopyOnWriteArraySet<Player.Listener>()
+
+        override fun addListener(listener: Player.Listener) {
+            listeners += listener
+            super.addListener(listener)
+        }
+
+        override fun removeListener(listener: Player.Listener) {
+            listeners -= listener
+            super.removeListener(listener)
+        }
+
+        // A DAC on direct USB output, whose volume is its own hardware attenuator:
+        // remote, as far as Android's volume keys are concerned, since the music
+        // stream no longer reaches it (BitChord).
+        private val dac: Boolean get() = DacVolume.level.value != null
+
+        private fun dacVolume(): Int = ((DacVolume.level.value ?: 0f) * 100).roundToInt()
+
+        override fun getAvailableCommands(): Player.Commands =
+            if (dac) super.getAvailableCommands().buildUpon().addAll(*DEVICE_VOLUME_COMMANDS).build()
+            else super.getAvailableCommands()
+
+        override fun isCommandAvailable(command: Int): Boolean =
+            (dac && command in DEVICE_VOLUME_COMMANDS) || super.isCommandAvailable(command)
+
+        /** The DAC volume came or went ([routeChanged]), or moved. Told by the service. */
+        fun onDacVolumeChanged(routeChanged: Boolean) {
+            if (routeChanged) {
+                val commands = availableCommands
+                listeners.forEach { it.onAvailableCommandsChanged(commands) }
+                announce(Player.EVENT_AVAILABLE_COMMANDS_CHANGED)
+                val info = deviceInfo
+                listeners.forEach { it.onDeviceInfoChanged(info) }
+                announce(Player.EVENT_DEVICE_INFO_CHANGED)
+            }
+            val volume = deviceVolume
+            val muted = isDeviceMuted
+            listeners.forEach { it.onDeviceVolumeChanged(volume, muted) }
+            announce(Player.EVENT_DEVICE_VOLUME_CHANGED)
+        }
+
+        private fun announce(event: Int) {
+            val events = Player.Events(FlagSet.Builder().add(event).build())
+            listeners.forEach { it.onEvents(this, events) }
+        }
+
+        override fun getDeviceInfo(): DeviceInfo = if (dac) DAC_DEVICE else super.getDeviceInfo()
+
+        override fun getDeviceVolume(): Int = if (dac) dacVolume() else super.getDeviceVolume()
+
+        override fun isDeviceMuted(): Boolean = if (dac) false else super.isDeviceMuted()
+
+        override fun setDeviceVolume(volume: Int, flags: Int) {
+            if (dac) DacVolume.set(volume / 100f) else super.setDeviceVolume(volume, flags)
+        }
+
+        @Deprecated("Deprecated in Java")
+        @Suppress("DEPRECATION")
+        override fun setDeviceVolume(volume: Int) {
+            if (dac) DacVolume.set(volume / 100f) else super.setDeviceVolume(volume)
+        }
+
+        override fun increaseDeviceVolume(flags: Int) {
+            if (dac) DacVolume.step(+1) else super.increaseDeviceVolume(flags)
+        }
+
+        @Deprecated("Deprecated in Java")
+        @Suppress("DEPRECATION")
+        override fun increaseDeviceVolume() {
+            if (dac) DacVolume.step(+1) else super.increaseDeviceVolume()
+        }
+
+        override fun decreaseDeviceVolume(flags: Int) {
+            if (dac) DacVolume.step(-1) else super.decreaseDeviceVolume(flags)
+        }
+
+        @Deprecated("Deprecated in Java")
+        @Suppress("DEPRECATION")
+        override fun decreaseDeviceVolume() {
+            if (dac) DacVolume.step(-1) else super.decreaseDeviceVolume()
+        }
+
+        override fun setDeviceMuted(muted: Boolean, flags: Int) {
+            if (!dac) super.setDeviceMuted(muted, flags)
+        }
+
         // Shuffle is a queue edit (BitChord's QueueShuffle), never the player's own
         // hidden order: a car, Bluetooth or the notification asking for shuffle
         // gets the same toggle as the app's button.
@@ -475,6 +830,25 @@ class PlaybackService : MediaLibraryService() {
         /** The player's audio session, for opening the system equalizer from Settings. */
         @Volatile var audioSessionId: Int = 0
 
+        /**
+         * Media3's stock threshold is 100ms, which eats the breaths and rests
+         * inside a song; a second-long floor only trims dead air (BitChord).
+         */
+        private const val MIN_SILENCE_US = 1_000_000L
+
+        private val DAC_DEVICE: DeviceInfo = DeviceInfo.Builder(DeviceInfo.PLAYBACK_TYPE_REMOTE)
+            .setMinVolume(0)
+            .setMaxVolume(100)
+            .build()
+
+        private val DEVICE_VOLUME_COMMANDS = intArrayOf(
+            Player.COMMAND_GET_DEVICE_VOLUME,
+            Player.COMMAND_SET_DEVICE_VOLUME,
+            Player.COMMAND_SET_DEVICE_VOLUME_WITH_FLAGS,
+            Player.COMMAND_ADJUST_DEVICE_VOLUME,
+            Player.COMMAND_ADJUST_DEVICE_VOLUME_WITH_FLAGS,
+        )
+
         private val AUDIO_ATTRIBUTES = AudioAttributes.Builder()
             .setUsage(C.USAGE_MEDIA)
             .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
@@ -482,6 +856,9 @@ class PlaybackService : MediaLibraryService() {
     }
 
     override fun onDestroy() {
+        outputReconfigureJob?.cancel()
+        audioManager?.unregisterAudioDeviceCallback(outputDeviceCallback)
+        UsbDirectDevices.onChanged = null
         crossfade?.release()
         crossfade = null
         scrobbler?.destroy()
