@@ -1,5 +1,6 @@
 package com.ghostmikz.ghostly.ui
 
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.automirrored.rounded.Sort
 import com.ghostmikz.ghostly.data.sortedForLibrary
@@ -104,13 +105,19 @@ fun LibraryScreen(
         }
     }
     when (tab) {
-        0 -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = bottomPad)) {
-            item { header() }
-            itemsIndexed(songs, key = { _, s -> s.id }) { i, s ->
-                Box(Modifier.animateItem()) {
-                    SongRow(s, s.id == currentId, { actions.play(songs, i, false, "Library") }, { SongMenuItems(s, actions, it) }, onPlayNext = { actions.playNext(s) })
+        0 -> Box(Modifier.fillMaxSize()) {
+            val listState = rememberLazyListState()
+            LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = bottomPad)) {
+                item { header() }
+                itemsIndexed(songs, key = { _, s -> s.id }) { i, s ->
+                    Box(Modifier.animateItem()) {
+                        SongRow(s, s.id == currentId, { actions.play(songs, i, false, "Library") }, { SongMenuItems(s, actions, it) }, onPlayNext = { actions.playNext(s) })
+                    }
                 }
             }
+            // The header is row 0, so the songs start at 1.
+            val playingRow = remember(songs, currentId) { songs.indexOfFirst { it.id == currentId }.takeIf { it >= 0 }?.plus(1) }
+            LocateTargetFor(listState, playingRow)
         }
         1 -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = bottomPad)) {
             item { header() }
@@ -210,7 +217,9 @@ fun CollectionScreen(
     emptyText: String = "Nothing here yet.",
     extra: (@Composable () -> Unit)? = null,
 ) {
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = bottomPad)) {
+    Box(Modifier.fillMaxSize()) {
+    val listState = rememberLazyListState()
+    LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = bottomPad)) {
         item {
             Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
                 TopBarSpace()
@@ -250,6 +259,10 @@ fun CollectionScreen(
                     trackNumber = if (numbered) s.track % 1000 else null, onPlayNext = { actions.playNext(s) })
             }
         }
+    }
+    // The header is row 0 (an empty list adds a note after it, but then nothing plays from it).
+    val playingRow = remember(songs, currentId) { songs.indexOfFirst { it.id == currentId }.takeIf { it >= 0 }?.plus(1) }
+    LocateTargetFor(listState, playingRow)
     }
 }
 

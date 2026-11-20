@@ -1,5 +1,8 @@
 package com.ghostmikz.ghostly
 
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.ui.draw.drawBehind
 import android.Manifest
 import com.ghostmikz.ghostly.data.Song
@@ -359,6 +362,8 @@ private fun Main(vm: PlayerViewModel) {
     val liquid = Prefs.liquidGlass.state.collectAsState().value && isGlassSupported()
     val reduceBlur = Prefs.reduceBlur.state.collectAsState().value
     val showCollapsed = liquid && collapsed && state.current != null
+    /** How tall the floating bars stand, queue notice included, for the locate button. */
+    var barsHeightPx by remember { mutableIntStateOf(0) }
     // The page is recorded into a layer that the frosted/glass bars sample. Not under
     // "Reduce dynamic blur": then nothing samples it and the surfaces fill solid.
     val record = isGlassSupported() && !reduceBlur
@@ -481,8 +486,19 @@ private fun Main(vm: PlayerViewModel) {
         // Fade the content out under the floating bars (BitChord's BottomFadeScrim).
         BottomFadeScrim(Modifier.align(Alignment.BottomCenter), withMiniPlayer = state.current != null, inset = navBar)
 
-        // "Song will play next" and the like, just above the mini player (BitChord).
-        QueueNoticeHost(Modifier.align(Alignment.BottomCenter).padding(bottom = bottomPad - 24.dp + 4.dp))
+        // Over the page rather than in it, so it can be glass (see LocateTargetFor).
+        // Its own spot is just above the full bars; while a queue notice makes the
+        // bars taller than that, it rides above the notice instead. Fades with the
+        // bars as the player opens, and is gone once it is open.
+        val locateShown by remember { derivedStateOf { sheet.value > 0f } }
+        if (locateShown) {
+            val barsTop = navBar + (if (liquid) 8.dp else 6.dp) + with(LocalDensity.current) { barsHeightPx.toDp() }
+            LocatePlayingButton(
+                Modifier.align(Alignment.BottomEnd)
+                    .padding(end = 20.dp, bottom = maxOf(bottomPad - 24.dp + 12.dp, barsTop + 12.dp))
+                    .graphicsLayer { alpha = sheet.value },
+            )
+        }
 
         // The DAC's own volume beside the volume keys while direct USB owns it
         // (BitChord); not over the full player, whose own bar already shows it.
@@ -495,8 +511,10 @@ private fun Main(vm: PlayerViewModel) {
             // BitChord's default: the mini player stacked over the frosted tab bar.
             Column(
                 Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 6.dp)
-                    .graphicsLayer { alpha = sheet.value },
+                    .graphicsLayer { alpha = sheet.value }.onSizeChanged { barsHeightPx = it.height },
             ) {
+                // "Song will play next" and the like, right on the mini player (BitChord).
+                QueueNoticeHost()
                 MiniPlayer(state, vm, onOpen = { settle(true) }, modifier = Modifier.padding(horizontal = 19.dp),
                     sidePadding = 0.dp, dragModifier = drag,
                     onArtPlaced = { miniArtCoords = it }, hideArt = { sheet.value < 1f })
@@ -505,10 +523,13 @@ private fun Main(vm: PlayerViewModel) {
                     modifier = Modifier.padding(horizontal = 19.dp))
             }
         } else {
-            SharedTransitionLayout(
+            Column(
                 Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 8.dp)
-                    .graphicsLayer { alpha = sheet.value },
+                    .graphicsLayer { alpha = sheet.value }.onSizeChanged { barsHeightPx = it.height },
             ) {
+            // On the mini player, so it folds down with the bars (BitChord).
+            QueueNoticeHost()
+            SharedTransitionLayout(Modifier.fillMaxWidth()) {
                 AnimatedContent(
                     targetState = showCollapsed,
                     transitionSpec = {
@@ -538,6 +559,7 @@ private fun Main(vm: PlayerViewModel) {
                         }
                     }
                 }
+            }
             }
         }
 

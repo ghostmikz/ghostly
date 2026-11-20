@@ -1,5 +1,9 @@
 package com.ghostmikz.ghostly.ui
 
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.foundation.layout.size
@@ -804,5 +808,85 @@ fun IosSwitch(checked: Boolean, onCheckedChange: ((Boolean) -> Unit)?, modifier:
                 .shadow(2.dp, CircleShape)
                 .background(Color.White, CircleShape),
         )
+    }
+}
+
+// ---------- locate the playing song ----------
+
+/** The song list on screen, and its row that is playing, for [LocatePlayingButton]. */
+object LocateTarget {
+    class Target(val listState: androidx.compose.foundation.lazy.LazyListState, val row: Int?)
+
+    internal var current by mutableStateOf<Target?>(null)
+}
+
+/**
+ * Tells [LocatePlayingButton] about this song list while it is on screen. The
+ * button itself is drawn over the page, not in it, so it can be glass like the
+ * other floating buttons: glass samples the page, and can't sample itself.
+ */
+@Composable
+fun LocateTargetFor(listState: androidx.compose.foundation.lazy.LazyListState, playingRow: Int?) {
+    val target = remember(listState, playingRow) { LocateTarget.Target(listState, playingRow) }
+    androidx.compose.runtime.DisposableEffect(target) {
+        LocateTarget.current = target
+        onDispose { if (LocateTarget.current === target) LocateTarget.current = null }
+    }
+}
+
+/**
+ * A round button in the corner that scrolls the song list on screen to the song
+ * that is playing. It only shows while that song is in the list but out of
+ * sight, and goes away again once it is on screen.
+ */
+@Composable
+fun LocatePlayingButton(modifier: Modifier = Modifier) {
+    val target = LocateTarget.current
+    val listState = target?.listState
+    val targetIndex = target?.row
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
+    val reduceAnimation by com.ghostmikz.ghostly.data.Prefs.reduceAnimation.state.collectAsState()
+    val offScreen by remember(listState, targetIndex) {
+        androidx.compose.runtime.derivedStateOf {
+            val state = listState ?: return@derivedStateOf false
+            val index = targetIndex ?: return@derivedStateOf false
+            val info = state.layoutInfo
+            val row = info.visibleItemsInfo.firstOrNull { it.index == index }
+            // Counted as out of sight until the whole row clears the bars below.
+            row == null || row.offset < info.viewportStartOffset || row.offset + row.size > info.viewportEndOffset - info.afterContentPadding
+        }
+    }
+    val glass = LocalLiquidGlassEnabled.current
+    androidx.compose.animation.AnimatedVisibility(
+        visible = offScreen,
+        modifier = modifier,
+        enter = if (reduceAnimation) androidx.compose.animation.EnterTransition.None
+        else androidx.compose.animation.fadeIn() + androidx.compose.animation.scaleIn(initialScale = 0.6f),
+        exit = if (reduceAnimation) androidx.compose.animation.ExitTransition.None
+        else androidx.compose.animation.fadeOut() + androidx.compose.animation.scaleOut(targetScale = 0.6f),
+    ) {
+        // The same material as the floating back and settings buttons.
+        Box(
+            Modifier.size(48.dp)
+                .bounceClick(scaleDown = 0.88f) {
+                    val state = listState ?: return@bounceClick
+                    val index = targetIndex ?: return@bounceClick
+                    haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                    scope.launch {
+                        // Lands the row about a third of the way down, not hard
+                        // against the top under the floating buttons.
+                        val lead = -state.layoutInfo.viewportSize.height / 3
+                        if (reduceAnimation) state.scrollToItem(index, lead) else state.animateScrollToItem(index, lead)
+                    }
+                }
+                .clip(CircleShape)
+                .then(if (glass) Modifier.liquidGlass(CircleShape) else Modifier.frosted(CircleShape, GhostlyColors.Surface))
+                .border(1.dp, GhostlyColors.Card, CircleShape)
+                .semantics { contentDescription = "Show the playing song" },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Rounded.MyLocation, null, tint = if (glass) glassContentColor() else GhostlyColors.Text, modifier = Modifier.size(24.dp))
+        }
     }
 }
