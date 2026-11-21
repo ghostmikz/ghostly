@@ -238,7 +238,8 @@ object Prefs {
     private fun reload() {
         _lastfmUser.value = account.getString("lastfm_user", "").orEmpty()
         _theme.value = sp.getString("theme", "system") ?: "system"
-        _lyricsFolder.value = sp.getString("lyrics_folder", "") ?: ""
+        // Defensive, like the enum settings: a stray import must not crash every launch.
+        _lyricsFolder.value = runCatching { sp.getString("lyrics_folder", "") }.getOrNull() ?: ""
         _localSort.value = sp.getString("local_music_sort", null)
             ?.let { saved -> LocalMusicSort.entries.firstOrNull { it.name == saved } } ?: LocalMusicSort.TITLE_ASC
         all.forEach { it.load(sp) }
@@ -271,7 +272,7 @@ object Prefs {
      * Never carried by a backup: each turns on full-scale output to a DAC, which
      * only happens behind its own warning in Settings, on this phone.
      */
-    private val NOT_BACKED_UP = setOf("bit_perfect_mode", "usb_allow_fixed_volume")
+    private val NOT_BACKED_UP = setOf("bit_perfect_mode", "usb_allow_fixed_volume", "lyrics_folder")
 
     /** Settings as JSON for "Export data". The Last.fm session is left out on purpose. */
     fun exportJson(): JSONObject {

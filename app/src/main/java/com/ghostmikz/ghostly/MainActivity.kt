@@ -351,11 +351,14 @@ private fun Main(vm: PlayerViewModel) {
     // ---- the tab bar shrinks to a bubble while scrolling down, and comes back on the way up ----
     var collapsed by remember { mutableStateOf(false) }
     // How far the page on screen has been scrolled down, for the top fade.
-    var pageScroll by remember { mutableFloatStateOf(0f) }
+    // Kept per page, as the pages keep their own scroll (pageStates): coming back to a
+    // list that is already scrolled down keeps its fade.
+    val pageScrolls = remember { androidx.compose.runtime.mutableStateMapOf<String, Float>() }
+    var pageKey by remember { mutableStateOf("") }
     val scrollWatch = remember {
         object : NestedScrollConnection {
             override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
-                pageScroll = (pageScroll - consumed.y).coerceAtLeast(0f)
+                pageScrolls[pageKey] = ((pageScrolls[pageKey] ?: 0f) - consumed.y).coerceAtLeast(0f)
                 return Offset.Zero
             }
             var run = 0f
@@ -370,7 +373,9 @@ private fun Main(vm: PlayerViewModel) {
         }
     }
     val page = Page(tab, stack.size, stack.lastOrNull())
-    LaunchedEffect(page) { collapsed = false; pageScroll = 0f }
+    LaunchedEffect(page) { collapsed = false }
+    val currentPageKey = "${page.tab}/${page.screen}"
+    androidx.compose.runtime.SideEffect { pageKey = currentPageKey }
     // Liquid Glass (BitChord): only the glass bar folds while scrolling; the default bar stays put.
     val liquid = Prefs.liquidGlass.state.collectAsState().value && isGlassSupported()
     val reduceBlur = Prefs.reduceBlur.state.collectAsState().value
@@ -478,7 +483,8 @@ private fun Main(vm: PlayerViewModel) {
                     onOpenArtist = { name -> if (library.artists.any { it.name == name }) stack += Screen.ArtistScreen(name) },
                     onOpenAlbum = { id -> id?.toLongOrNull()?.takeIf { a -> library.albums.any { it.id == a } }?.let { stack += Screen.AlbumScreen(it) } },
                     onShare = { replayShare = null; showReplayShare = true },
-                    contentPadding = PaddingValues(top = 68.dp + WindowInsets.statusBars.asPaddingValues().calculateTopPadding(), bottom = bottomPad),
+                    // Its heading makes its own room for the status bar (TopBarSpace).
+                    contentPadding = PaddingValues(top = 68.dp, bottom = bottomPad),
                     landingPage = top.landing,
                 )
                 is Screen.FolderScreen -> {
@@ -496,7 +502,7 @@ private fun Main(vm: PlayerViewModel) {
         val statusTop = with(LocalDensity.current) { WindowInsets.statusBars.getTop(this).toDp() }
         val fadeRampPx = with(LocalDensity.current) { TOP_FADE_RAMP.toPx() }
         val topFadeAlpha by remember(stack.isEmpty()) {
-            derivedStateOf { if (stack.isNotEmpty()) 1f else (pageScroll / fadeRampPx).coerceIn(0f, 1f) }
+            derivedStateOf { if (stack.isNotEmpty()) 1f else ((pageScrolls[pageKey] ?: 0f) / fadeRampPx).coerceIn(0f, 1f) }
         }
         BottomFadeScrim(
             Modifier.align(Alignment.TopCenter).rotate(180f).graphicsLayer { alpha = topFadeAlpha },

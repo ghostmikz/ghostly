@@ -1,5 +1,11 @@
 package com.ghostmikz.ghostly.ui
 
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.rounded.Check
@@ -87,8 +93,13 @@ fun LibraryScreen(
     // BitChord's "search this folder" on the device library: the Songs tab narrowed as you type.
     var searching by rememberSaveable { mutableStateOf(false) }
     var query by rememberSaveable { mutableStateOf("") }
-    val songs = remember(allSongs, query) { allSongs.filter { it.matchesQuery(query) } }
-    val searchAction = remember { listOf(PageActions.Action(BitChordIcons.Search, "Search this list") { searching = true }) }
+    // Only the Songs tab is narrowed, and leaving it closes the search, so no other tab
+    // (or Play and Shuffle there) quietly works from a filter nobody can see.
+    val songs = remember(allSongs, query, tab) { if (tab == 0) allSongs.filter { it.matchesQuery(query) } else allSongs }
+    LaunchedEffect(tab) { if (tab != 0) { searching = false; query = "" } }
+    // Bumped by the button, so the list scrolls back up to the field wherever it was.
+    var searchRequests by remember { mutableIntStateOf(0) }
+    val searchAction = remember { listOf(PageActions.Action(BitChordIcons.Search, "Search this list") { searching = true; searchRequests++ }) }
     if (tab == 0) PageActionsFor(searchAction)
     // Held out here, above the per-tab lists, so the pill slides across a tab
     // change instead of starting over in the new list.
@@ -121,6 +132,8 @@ fun LibraryScreen(
     when (tab) {
         0 -> Box(Modifier.fillMaxSize()) {
             val listState = rememberLazyListState()
+            // The field is in the header, at the top of the list.
+            LaunchedEffect(searchRequests) { if (searchRequests > 0) listState.animateScrollToItem(0) }
             LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = bottomPad)) {
                 item { header() }
                 itemsIndexed(songs, key = { _, s -> s.id }) { i, s ->
@@ -238,19 +251,24 @@ fun CollectionScreen(
     val sort = SongSort.valueOf(sortName)
     var sortMenu by remember { mutableStateOf(false) }
     val shown = remember(songs, query, sort) { songs.filter { it.matchesQuery(query) }.sortedForDetail(sort) }
+    var searchRequests by remember { mutableIntStateOf(0) }
     val pageActions = remember {
         listOf(
-            PageActions.Action(BitChordIcons.Search, "Search this list") { searching = true },
+            PageActions.Action(BitChordIcons.Search, "Search this list") { searching = true; searchRequests++ },
             PageActions.Action(Icons.AutoMirrored.Rounded.Sort, "Sort") { sortMenu = true },
         )
     }
     if (songs.isNotEmpty()) PageActionsFor(pageActions)
     Box(Modifier.fillMaxSize()) {
     // Where the sort menu drops from: under the sort button in the top bar.
-    Box(Modifier.align(Alignment.TopEnd).padding(top = 60.dp, end = 76.dp)) {
+    // Pages run behind the status bar now, so the menu clears it as the buttons do.
+    Box(Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(top = 60.dp, end = 76.dp)) {
         SongSortMenu(sortMenu, sort, onSelect = { sortName = it.name }, onDismiss = { sortMenu = false })
     }
     val listState = rememberLazyListState()
+    // Brings the field (row 1, under the header) into view, just clear of the top bar.
+    val topBarPx = with(LocalDensity.current) { (WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 68.dp).roundToPx() }
+    LaunchedEffect(searchRequests) { if (searchRequests > 0) listState.animateScrollToItem(1, -topBarPx) }
     LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = bottomPad)) {
         item {
             Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {

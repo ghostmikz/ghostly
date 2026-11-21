@@ -8,6 +8,8 @@ import android.util.Log
 import com.ghostmikz.ghostly.data.Prefs
 import com.ghostmikz.ghostly.data.Song
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -26,8 +28,15 @@ object LocalLyrics {
     /** Most bytes worth reading from a `.lrc`: anything bigger isn't lyrics. */
     private const val MAX_LRC_BYTES = 1L shl 20
 
+    /** One `.lrc` in the granted folder: where it sits under the volume (lower-case, no extension), and how to open it. */
+    private class LrcFile(val path: String, val uri: Uri)
+
     /** The granted folder's `.lrc` files by lower-case base name, built once per folder. */
-    @Volatile private var index: Pair<String, Map<String, Uri>>? = null
+    @Volatile private var index: Pair<String, Map<String, List<LrcFile>>>? = null
+    /** Bumped by [forget], so a scan that finishes after it doesn't put the old list back. */
+    @Volatile private var generation = 0
+    /** One scan at a time: songs skipped through quickly wait for it rather than each starting their own. */
+    private val scanning = kotlinx.coroutines.sync.Mutex()
 
     /** The song's lyrics, or null when it has none. Runs on [Dispatchers.IO]. */
     suspend fun forSong(context: Context, song: Song): List<LyricLine>? = withContext(Dispatchers.IO) {
@@ -39,6 +48,7 @@ object LocalLyrics {
 
     /** Forgets the granted folder's list of files, after a rescan or a new folder. */
     fun forget() {
+        generation++
         index = null
     }
 
@@ -57,7 +67,7 @@ object LocalLyrics {
         return plain.map { LyricLine(0L, it) }
     }
 
-    private fun sidecar(context: Context, song: Song): String? {
+    private suspend fun sidecar(context: Context, song: Song): String? {
         val name = displayName(context, song) ?: return null
         val base = name.substringBeforeLast('.', name)
         // Directly beside the song, where the system lets a music app read it.
@@ -69,7 +79,15 @@ object LocalLyrics {
         }
         // From the folder granted in Settings.
         val tree = Prefs.lyricsFolder.value.takeIf { it.isNotEmpty() } ?: return null
-        val uri = indexFor(context, tree)[base.lowercase()] ?: return null
+        val candidates = indexFor(context, tree)[base.lowercase()] ?: return null
+        // The one beside the song: every album can have its own "01 Intro". Matched on
+        // the end of the path, since a song's folder and a document's id name the
+        // place from different roots. A name alone only answers when it is unique
+        // (a provider whose ids are not paths).
+        val songPath = (song.folder.trimEnd('/') + "/" + base).trimStart('/').lowercase()
+        val uri = candidates.firstOrNull { songPath.endsWith(it.path) || it.path.endsWith(songPath) }?.uri
+            ?: candidates.singleOrNull()?.uri
+            ?: return null
         return context.contentResolver.openInputStream(uri)?.use { input ->
             val bytes = input.readNBytesCompat(MAX_LRC_BYTES.toInt())
             String(bytes, Charsets.UTF_8)
@@ -88,10 +106,11 @@ object LocalLyrics {
         }
 
     /** Every `.lrc` under the granted folder, by base name; walked once and kept. */
-    private fun indexFor(context: Context, tree: String): Map<String, Uri> {
-        index?.takeIf { it.first == tree }?.let { return it.second }
+    private suspend fun indexFor(context: Context, tree: String): Map<String, List<LrcFile>> = scanning.withLock {
+        index?.takeIf { it.first == tree }?.let { return@withLock it.second }
+        val startedAt = generation
         val treeUri = Uri.parse(tree)
-        val found = HashMap<String, Uri>()
+        val found = HashMap<String, MutableList<LrcFile>>()
         val pending = ArrayDeque<String>().apply { add(DocumentsContract.getTreeDocumentId(treeUri)) }
         val columns = arrayOf(
             DocumentsContract.Document.COLUMN_DOCUMENT_ID,
@@ -100,6 +119,8 @@ object LocalLyrics {
         )
         var visited = 0
         while (pending.isNotEmpty() && visited < MAX_FOLDERS) {
+            // The song changed and nobody wants this answer any more.
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
             val parent = pending.removeFirst()
             visited++
             val children = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parent)
@@ -111,14 +132,17 @@ object LocalLyrics {
                         if (c.getString(2) == DocumentsContract.Document.MIME_TYPE_DIR) {
                             pending.add(id)
                         } else if (name.endsWith(".lrc", ignoreCase = true)) {
-                            found.putIfAbsent(name.dropLast(4).lowercase(), DocumentsContract.buildDocumentUriUsingTree(treeUri, id))
+                            // A storage document's id is volume:path, so its path follows the colon.
+                            val path = id.substringAfter(':').dropLast(4).trimStart('/').lowercase()
+                            found.getOrPut(name.dropLast(4).lowercase()) { mutableListOf() }
+                                .add(LrcFile(path, DocumentsContract.buildDocumentUriUsingTree(treeUri, id)))
                         }
                     }
                 }
             }
         }
-        index = tree to found
-        return found
+        if (generation == startedAt) index = tree to found
+        found
     }
 
     /** Folders walked at most, so a granted folder like the whole of storage can't keep it busy forever. */

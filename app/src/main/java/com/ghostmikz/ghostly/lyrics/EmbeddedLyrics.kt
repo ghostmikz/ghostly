@@ -70,8 +70,49 @@ object EmbeddedLyrics {
         }
 
     /** The raw LRC text for the file, preferring this app's word-timed field. */
-    internal fun read(context: Context, uri: Uri): String? =
-        open(context, uri)?.use { fromBytes(it.readAtMost(MAX_TAG_BYTES)) }
+    internal fun read(context: Context, uri: Uri): String? {
+        val head = open(context, uri)?.use { it.readAtMost(MAX_TAG_BYTES) } ?: return null
+        fromBytes(head)?.let { return it }
+        // An MP4 may keep its moov after the audio, out of reach of the head read on
+        // anything longer than a few minutes: found by walking the top-level boxes.
+        return if (head.isMp4()) trailingMoov(context, uri)?.let(::mp4) else null
+    }
+
+    /**
+     * The file's `moov` box wherever it is, found by hopping from one top-level box
+     * header to the next (the audio in between is skipped, not read). Null when there
+     * is none, or it is bigger than [MAX_TAG_BYTES].
+     */
+    private fun trailingMoov(context: Context, uri: Uri): ByteArray? = runCatching {
+        context.contentResolver.openFileDescriptor(uri, "r")?.use { descriptor ->
+            java.io.FileInputStream(descriptor.fileDescriptor).channel.use { channel ->
+                val size = channel.size()
+                val header = java.nio.ByteBuffer.allocate(16)
+                var position = 0L
+                while (position + 8 <= size) {
+                    header.clear()
+                    if (channel.read(header, position) < 8) return@use null
+                    val bytes = header.array()
+                    val small = readU32(bytes, 0)
+                    val type = String(bytes, 4, 4, Charsets.ISO_8859_1)
+                    val boxSize = when (small) {
+                        1L -> if (header.position() >= 16) readU64(bytes, 8) else return@use null
+                        0L -> size - position
+                        else -> small
+                    }
+                    if (boxSize < 8) return@use null
+                    if (type == "moov") {
+                        if (boxSize > MAX_TAG_BYTES) return@use null
+                        val box = java.nio.ByteBuffer.allocate(boxSize.toInt())
+                        while (box.hasRemaining() && channel.read(box, position + box.position()) > 0) Unit
+                        return@use box.array()
+                    }
+                    position += boxSize
+                }
+                null
+            }
+        }
+    }.getOrNull()
 
     /**
      * The raw LRC text in [head], whichever of the three containers it is.
