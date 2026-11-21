@@ -53,6 +53,14 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     val state: StateFlow<PlayerState> = _state
 
     private var controller: MediaController? = null
+
+    /**
+     * BitChord's playhead for the lyrics: the position with the moment it was
+     * read, and a count of deliberate jumps (a seek, a skip, a track change) so
+     * the lyrics can tell a real jump from a late reading.
+     */
+    val playhead = com.ghostmikz.ghostly.ui.lyrics.PlaybackPosition()
+    private var playheadItem = -1
     private var byId: Map<String, Song> = emptyMap()
     private var from = ""
 
@@ -68,7 +76,10 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             launch { QueueShuffle.enabled.collect { refresh() } }
             refresh()
             while (isActive) {
-                if (c.isPlaying) _state.value = _state.value.copy(positionMs = c.currentPosition)
+                if (c.isPlaying) {
+                    _state.value = _state.value.copy(positionMs = c.currentPosition)
+                    playhead.report(c.currentPosition)
+                }
                 delay(500)
             }
         }
@@ -87,6 +98,12 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun refresh() {
         val c = controller ?: return
+        // A new track (repeat-one starting over included) is a jump for the lyrics.
+        if (c.currentMediaItemIndex != playheadItem || c.currentPosition < playhead.positionMs - 1_500) {
+            playheadItem = c.currentMediaItemIndex
+            playhead.seeks++
+        }
+        playhead.report(c.currentPosition)
         val ids = byId
         // The queue in the order it will actually play (the shuffle order when
         // shuffle is on), every item kept: one the library doesn't list (filtered
@@ -143,6 +160,8 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     fun seekTo(ms: Long) {
         controller?.seekTo(ms)
         _state.value = _state.value.copy(positionMs = ms)
+        playhead.seeks++
+        playhead.report(ms)
     }
     /** [index] is a row of [PlayerState.queue]; the player's own index comes from the play order. */
     fun playQueueItem(index: Int) = controller?.let { c ->

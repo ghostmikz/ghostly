@@ -1,5 +1,19 @@
 package com.ghostmikz.ghostly.ui
 
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.foundation.layout.offset
+import androidx.compose.material.icons.rounded.FastRewind
+import androidx.compose.material.icons.rounded.FastForward
+import kotlinx.coroutines.launch
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.animation.core.Animatable
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.semantics.disabled
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.Crossfade
@@ -129,14 +143,55 @@ fun NowPlayingScreen(
     val config = androidx.compose.ui.platform.LocalConfiguration.current
     val sideways = config.screenWidthDp > config.screenHeightDp && config.screenWidthDp >= 560
     var showQueue by remember { mutableStateOf(false) }
+    // Lyrics from the song itself (BitChord's lyrics panel; see LocalLyrics). Null while looking.
+    var lyricsOpen by remember { mutableStateOf(false) }
+    val lyricsContext = LocalContext.current
+    val lyrics by produceState<List<com.ghostmikz.ghostly.lyrics.LyricLine>?>(null, song?.id) {
+        value = null
+        value = song?.let { com.ghostmikz.ghostly.lyrics.LocalLyrics.forSong(lyricsContext, it) } ?: emptyList()
+    }
     var showMenu by remember { mutableStateOf(false) }
     var showSleep by remember { mutableStateOf(false) }
+    // "Full-screen cover art", as BitChord's full-bleed artwork: a phone idiom, so
+    // the portrait player only. See the banner in [cover].
+    // Not with the lyrics open: then the cover is the header's thumbnail.
+    val banner = fullCover && !sideways && !lyricsOpen
     // Apple-style: the cover sits a bit smaller while paused.
-    // BitChord's artScale: down to 86% on a low, slow spring.
+    // BitChord's artScale: down to 86% on a low, slow spring. A banner has no
+    // sleeve to shrink, so it stays put.
     val coverScale by animateFloatAsState(
-        if (state.isPlaying || reduceAnim) 1f else 0.86f,
+        if (state.isPlaying || reduceAnim || banner || lyricsOpen) 1f else 0.86f,
         spring(dampingRatio = Spring.DampingRatioLowBouncy, stiffness = Spring.StiffnessLow), label = "cover",
     )
+    // BitChord: a sideways fling anywhere on the player skips tracks, and the cover
+    // follows the finger (damped: a hint, not a drag to position) so the gesture
+    // has something to hold on to. The song changes when the finger lifts.
+    val swipeThreshold = with(density) { 72.dp.toPx() }
+    val swipeSettle = remember { Animatable(0f) }
+    val swipeScope = rememberCoroutineScope()
+    val skipHaptics = LocalHapticFeedback.current
+    val setSwipeOffset: (Float) -> Unit = { target ->
+        swipeScope.launch { swipeSettle.animateTo(target, spring(stiffness = Spring.StiffnessMediumLow)) }
+    }
+    val skipSwipe = Modifier.pointerInput(Unit) {
+        var total = 0f
+        detectHorizontalDragGestures(
+            onDragStart = { total = 0f },
+            onDragCancel = { setSwipeOffset(0f) },
+            onDragEnd = {
+                when {
+                    total <= -swipeThreshold -> { skipHaptics.performHapticFeedback(HapticFeedbackType.LongPress); vm.next() }
+                    total >= swipeThreshold -> { skipHaptics.performHapticFeedback(HapticFeedbackType.LongPress); vm.previous() }
+                }
+                setSwipeOffset(0f)
+            },
+            onHorizontalDrag = { _, delta ->
+                total += delta
+                setSwipeOffset(total * 0.35f)
+            },
+        )
+    }
+
     // "Hide status bar in player"
     val view = LocalView.current
     DisposableEffect(hideStatus) {
@@ -156,8 +211,8 @@ fun NowPlayingScreen(
         if (!noBlend) Box(fadeRest) { ArtworkMeshBackdrop(mesh, seam = { with(density) { seamPx.toDp() } }) }
 
         // ---- the pieces, shared by the portrait and landscape players ----
-            // "Full-screen cover art" runs the cover edge to edge with square corners.
-            val restCorner = if (fullCover) 0.dp else 10.dp
+            // The banner has no corners; the card keeps its rounded sleeve.
+            val restCorner = if (banner) 0.dp else 10.dp
             val coverShape = remember(restCorner) {
                 object : androidx.compose.ui.graphics.Shape {
                     override fun createOutline(size: androidx.compose.ui.geometry.Size, layoutDirection: androidx.compose.ui.unit.LayoutDirection, density: androidx.compose.ui.unit.Density) =
@@ -178,13 +233,30 @@ fun NowPlayingScreen(
                         val mini = miniArt()
                         val here = coverCoords?.takeIf { it.isAttached }?.positionInRoot()
                         val t = openFraction()
-                        if (mini == null || here == null || t >= 1f || w <= 0) {
-                            val pl = measurable.measure(constraints)
-                            return@layout layout(w, h) { pl.place(0, 0) }
+                        // Where the cover sits with the player open: its own slot, or, as
+                        // BitChord's full-bleed banner, the player's whole width from the top
+                        // of the screen (behind the status bar) down to just under the slot,
+                        // so the credits below don't move when it appears.
+                        val playerBox = playerCoords?.takeIf { it.isAttached }
+                        val open = if (here == null) null else if (banner && playerBox != null) {
+                            val top = playerBox.positionInRoot()
+                            Rect(top.x, top.y, top.x + playerBox.size.width, here.y + h + BANNER_TAIL.toPx())
+                        } else {
+                            Rect(here.x, here.y, here.x + w, here.y + h)
+                        }
+                        if (mini == null || here == null || open == null || t >= 1f || w <= 0) {
+                            if (here == null || open == null || !banner) {
+                                val pl = measurable.measure(constraints)
+                                return@layout layout(w, h) { pl.place(0, 0) }
+                            }
+                            val pl = measurable.measure(
+                                Constraints.fixed(open.width.roundToInt().coerceAtLeast(1), open.height.roundToInt().coerceAtLeast(1)),
+                            )
+                            return@layout layout(w, h) { pl.place((open.left - here.x).roundToInt(), (open.top - here.y).roundToInt()) }
                         }
                         val offset = sheetOffsetPx()
                         val travel = travelPx().coerceAtLeast(1f)
-                        val sleeveOpen = Rect(here.x, here.y - offset, here.x + w, here.y - offset + h)
+                        val sleeveOpen = open.translate(0f, -offset)
                         val ride = ((mini.top - sleeveOpen.top) / travel).coerceIn(0f, 1f)
                         val target = lerp(mini, sleeveOpen.translate(0f, offset * ride), t)
                         val pl = measurable.measure(
@@ -193,8 +265,35 @@ fun NowPlayingScreen(
                         layout(w, h) { pl.place((target.left - here.x).roundToInt(), (target.top - here.y).roundToInt()) }
                     }
                     .scale(coverScale)
-                    .shadow(if (state.isPlaying && !fullCover) 30.dp else 0.dp, coverShape)
-                    .clip(coverShape).background(Color(0xFF0C0C0C))
+                    // Follows a skip swipe; a full-bleed banner stays put (BitChord).
+                    .graphicsLayer { translationX = if (banner) 0f else swipeSettle.value }
+                    .shadow(if (state.isPlaying && !banner) 30.dp else 0.dp, coverShape)
+                    .clip(coverShape)
+                    // The banner's lower part dissolves into the backdrop (BitChord), firmed
+                    // up into the cover's hard edge as it docks into the mini player. Ahead
+                    // of the backing colour below, so that dissolves with the picture.
+                    .then(
+                        if (!banner) Modifier else Modifier
+                            .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                            .drawWithContent {
+                                drawContent()
+                                val shown = if (miniArt() != null) openFraction() else 1f
+                                if (shown > 0f) {
+                                    drawRect(
+                                        brush = Brush.verticalGradient(
+                                            colorStops = Array(BANNER_FADE_STOPS + 1) { i ->
+                                                val f = i / BANNER_FADE_STOPS.toFloat()
+                                                f to Color.Black.copy(alpha = 1f - shown * smootherStep(f))
+                                            },
+                                            startY = size.height * (1f - BANNER_FADE_FRACTION),
+                                            endY = size.height,
+                                        ),
+                                        blendMode = BlendMode.DstIn,
+                                    )
+                                }
+                            },
+                    )
+                    .background(Color(0xFF0C0C0C))
                     .onGloballyPositioned { c -> playerCoords?.let { seamPx = it.localBoundingBoxOf(c).bottom } },
                 contentAlignment = Alignment.Center,
             ) {
@@ -270,11 +369,12 @@ fun NowPlayingScreen(
 
         }
         val bottomRow: @Composable () -> Unit = {
-            // bottom row: shuffle, repeat, queue
+            // bottom row: lyrics, shuffle, repeat, queue
             Row(
                 Modifier.fillMaxWidth().padding(top = 22.dp, bottom = 12.dp),
                 horizontalArrangement = Arrangement.SpaceAround, verticalAlignment = Alignment.CenterVertically,
             ) {
+                BottomIcon(BitChordIcons.Lyrics, "Lyrics", lyricsOpen) { lyricsOpen = !lyricsOpen; if (lyricsOpen && sideways) showQueue = false }
                 BottomIcon(BitChordIcons.Shuffle, "Shuffle", state.shuffle) { vm.toggleShuffle() }
                 Box(contentAlignment = Alignment.Center) {
                     BottomIcon(BitChordIcons.Repeat, "Repeat", state.repeat != Player.REPEAT_MODE_OFF) { vm.cycleRepeat() }
@@ -284,16 +384,19 @@ fun NowPlayingScreen(
                                 .clip(CircleShape).background(Color.White).padding(horizontal = 4.dp))
                     }
                 }
-                BottomIcon(BitChordIcons.Queue, "Queue", sideways && showQueue) { showQueue = !showQueue }
+                BottomIcon(BitChordIcons.Queue, "Queue", sideways && showQueue) { showQueue = !showQueue; if (sideways) lyricsOpen = false }
             }
         }
 
         if (sideways) {
             LandscapePlayerLayout(
-                showQueue = showQueue,
+                // The right column turns to the lyrics as it does to the queue.
+                showQueue = showQueue || lyricsOpen,
                 onClose = onClose,
                 fadeRest = fadeRest,
-                cover = cover,
+                // On the cover alone in landscape: the right column is full of sliders
+                // that should not be one stray sideways drag from changing the song.
+                cover = { sizing -> cover(sizing.then(skipSwipe)) },
                 actions = bottomRow,
                 mainPane = { compact ->
                     Column(Modifier.fillMaxWidth()) {
@@ -309,11 +412,18 @@ fun NowPlayingScreen(
                         if (!hideVolume) VolumeBar()
                     }
                 },
-                queuePane = { PlayerQueue(state, vm, Modifier.fillMaxSize().padding(top = 8.dp), padding = 0.dp) },
+                queuePane = {
+                    if (lyricsOpen) {
+                        LyricsPane(lyrics, song?.id, vm, state.isPlaying, Modifier.fillMaxSize().padding(top = 8.dp))
+                    } else {
+                        PlayerQueue(state, vm, Modifier.fillMaxSize().padding(top = 8.dp), padding = 0.dp)
+                    }
+                },
             )
-        } else Column(Modifier.fillMaxSize().systemBarsPadding()) {
+        } else Column(Modifier.fillMaxSize().systemBarsPadding().then(skipSwipe)) {
             // handle + where it is playing from
-            Column(fadeRest.fillMaxWidth().padding(horizontal = 28.dp).clickable(remember { MutableInteractionSource() }, null, onClick = onClose),
+            // In front of the full-bleed banner, which runs up behind it (BitChord).
+            Column(fadeRest.zIndex(1f).fillMaxWidth().padding(horizontal = 28.dp).clickable(remember { MutableInteractionSource() }, null, onClick = onClose),
                 horizontalAlignment = Alignment.CenterHorizontally) {
                 Spacer(Modifier.height(10.dp))
                 Box(Modifier.width(38.dp).height(5.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.35f)))
@@ -324,17 +434,53 @@ fun NowPlayingScreen(
                 }
             }
 
+            if (lyricsOpen) {
+                // BitChord's lyrics: the cover drawn in as the header's thumbnail beside
+                // the credits, the words in between, the controls kept below.
+                Row(
+                    fadeRest.fillMaxWidth().padding(horizontal = 28.dp).padding(top = 10.dp, bottom = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    cover(Modifier.size(52.dp))
+                    Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                        Text(song?.title ?: "", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(song?.artist ?: "", color = Dim, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+                LyricsPane(lyrics, song?.id, vm, state.isPlaying, fadeRest.weight(1f).fillMaxWidth().padding(horizontal = 28.dp))
+                Column(fadeRest.padding(horizontal = 28.dp)) {
+                    SeekBar(state, vm, if (nerdStats) song else null)
+                    transportRow(true)
+                    bottomRow()
+                }
+            } else {
             Spacer(Modifier.weight(0.5f))
             // Everything under the cover (title, seek bar, transport, volume, bottom
             // row) needs about 480dp, more with large text. On a short screen the
             // cover gives way instead of pushing the bottom row off the screen.
             val coverMax = (config.screenHeightDp - 300 - 180 * config.fontScale).coerceAtLeast(140f).dp
-            cover(
-                Modifier.align(Alignment.CenterHorizontally)
-                    .then(if (fullCover) Modifier else Modifier.padding(horizontal = 28.dp))
-                    .widthIn(max = coverMax)
-                    .fillMaxWidth().aspectRatio(1f),
-            )
+            Box(Modifier.align(Alignment.CenterHorizontally)) {
+                cover(
+                    Modifier.padding(horizontal = 28.dp)
+                        .widthIn(max = coverMax)
+                        .fillMaxWidth().aspectRatio(1f),
+                )
+                // BitChord's skip hint: which way the swipe would go, fading in with it,
+                // in the gap under the cover.
+                val hintShown by remember { derivedStateOf { kotlin.math.abs(swipeSettle.value) > 0.5f } }
+                val hintNext by remember { derivedStateOf { swipeSettle.value < 0f } }
+                if (hintShown) {
+                    Icon(
+                        if (hintNext) Icons.Rounded.FastForward else Icons.Rounded.FastRewind, null, tint = Color.White,
+                        modifier = Modifier.align(Alignment.BottomCenter).offset(y = 18.dp).size(16.dp)
+                            .graphicsLayer {
+                                val enabled = if (hintNext) state.hasNext else (state.hasPrevious || state.positionMs > RESTART_POINT_MS)
+                                alpha = (kotlin.math.abs(swipeSettle.value) / swipeThreshold).coerceIn(0f, 1f) * (if (enabled) 0.85f else 0.3f)
+                            },
+                    )
+                }
+            }
             Spacer(Modifier.weight(0.5f))
 
             Column(fadeRest.padding(horizontal = 28.dp)) {
@@ -345,11 +491,45 @@ fun NowPlayingScreen(
                 if (!hideVolume) VolumeBar()
                 bottomRow()
             }
+            }
         }
     }
 
     if (showQueue && !sideways) QueueSheet(state, vm) { showQueue = false }
     if (showSleep) SleepTimerSheet { showSleep = false }
+}
+
+/** How far the full-bleed banner runs past the bottom of the cover's slot: half BitChord's art-to-title gap. */
+private val BANNER_TAIL = 10.dp
+
+/**
+ * Share of the banner's height given over to its dissolve (BitChord's
+ * HERO_FADE_FRACTION). Generous on purpose: with no card edge to stop at, a short
+ * fade reads as a picture that was cut off rather than one that ran out.
+ */
+private const val BANNER_FADE_FRACTION = 0.42f
+
+/** Stops the dissolve is cut into, so it follows the curve rather than a straight ramp (BitChord). */
+private const val BANNER_FADE_STOPS = 16
+
+/** BitChord's smootherStep: an ease with no visible start or end to the fade. */
+private fun smootherStep(t: Float): Float {
+    val x = t.coerceIn(0f, 1f)
+    return x * x * x * (x * (x * 6f - 15f) + 10f)
+}
+
+/** BitChord's synced lyrics panel for the playing song; a tap on a line seeks to it. */
+@Composable
+private fun LyricsPane(lines: List<com.ghostmikz.ghostly.lyrics.LyricLine>?, songId: Long?, vm: PlayerViewModel, isPlaying: Boolean, modifier: Modifier) {
+    com.ghostmikz.ghostly.ui.lyrics.SyncedLyricsPanel(
+        lines = lines.orEmpty(),
+        trackKey = songId?.toString() ?: "",
+        position = vm.playhead,
+        looking = lines == null,
+        isPlaying = isPlaying,
+        onSeekToLine = { vm.seekTo(it) },
+        modifier = modifier,
+    )
 }
 
 /** Same actions, but anything that leaves the player first closes it. */

@@ -1,5 +1,6 @@
 package com.ghostmikz.ghostly.ui
 
+import androidx.compose.material.icons.outlined.Lyrics
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
@@ -160,7 +161,7 @@ private fun MainPage(songCount: Int, open: (Page) -> Unit) {
         Entry(Icons.Outlined.Person, "Account & integrations", "last.fm lastfm scrobble scrobbling now playing sign in account", Page.Account),
         Entry(Icons.Outlined.PlayCircle, "Playback", "skip silence equalizer eq bass audio crossfade output precision pcm bit depth float 16-bit 32-bit sample rate usb dac bit-perfect bitperfect exclusive hi-res volume convert", Page.Playback),
         Entry(Icons.Outlined.Brush, "Appearance", "liquid glass glass performance theme dark mode light mode system reduce animation blur blend colors full-screen cover art album", Page.Appearance),
-        Entry(Icons.Outlined.LibraryMusic, "Local Music", "rescan scan library songs folders filter non-music recordings wav", Page.Local),
+        Entry(Icons.Outlined.LibraryMusic, "Local Music", "rescan scan library songs folders filter non-music recordings wav lyrics lrc", Page.Local),
         Entry(Icons.Outlined.Storage, "Storage", "clear image cache artwork space", Page.Storage),
         Entry(Icons.Outlined.Inventory2, "Your data", "clear history liked favorites export import backup json", Page.Data),
         Entry(Icons.Outlined.MoreHoriz, "Miscellaneous", "swipe play next stop close recents hide volume status bar queue history playing from stats for nerds bitrate", Page.Misc),
@@ -379,6 +380,18 @@ private fun MiscPage() {
 @Composable
 private fun LocalPage(songCount: Int, onRescan: () -> Unit, scanning: Boolean) {
     var scanned by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val lyricsFolder by Prefs.lyricsFolder.collectAsState()
+    // A song's .lrc file isn't a music file, so Android only lets Ghostly read it
+    // from a folder the listener picks here (once; the grant is kept).
+    val pickLyricsFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        Prefs.setLyricsFolder(uri.toString())
+        com.ghostmikz.ghostly.lyrics.LocalLyrics.forget()
+    }
     Spacer(Modifier.height(12.dp))
     Card {
         PrefRow(Icons.Outlined.FilterAlt, "Filter non-music audio",
@@ -387,6 +400,11 @@ private fun LocalPage(songCount: Int, onRescan: () -> Unit, scanning: Boolean) {
     Spacer(Modifier.height(20.dp))
     Card {
         NavRow(Icons.Outlined.LibraryMusic, "Songs on this phone", null, value = "$songCount", chevron = false) {}
+        NavRow(Icons.Outlined.Lyrics, "Lyrics folder",
+            if (lyricsFolder.isEmpty()) "Pick the folder with your music to show its .lrc files"
+            else lyricsFolderName(lyricsFolder), chevron = false) {
+            pickLyricsFolder.launch(null)
+        }
         NavRow(Icons.Outlined.Refresh, "Rescan music",
             when {
                 scanned && scanning -> "Scanning…"
@@ -394,6 +412,7 @@ private fun LocalPage(songCount: Int, onRescan: () -> Unit, scanning: Boolean) {
                 else -> "Look for new or removed files"
             }, last = true, chevron = false) {
             onRescan(); scanned = true
+            com.ghostmikz.ghostly.lyrics.LocalLyrics.forget()
         }
     }
     Note("Ghostly plays the audio files Android knows about, from every folder on the phone.")
@@ -694,6 +713,12 @@ private fun Bypassed(on: Boolean, content: @Composable () -> Unit) {
         ),
     ) { content() }
 }
+
+/** "Music" for a granted tree like primary:Music, for the lyrics folder row. */
+private fun lyricsFolderName(tree: String): String =
+    runCatching {
+        android.provider.DocumentsContract.getTreeDocumentId(android.net.Uri.parse(tree)).substringAfter(':').ifEmpty { "Phone storage" }
+    }.getOrDefault("Chosen folder")
 
 // ---------- building blocks ----------
 

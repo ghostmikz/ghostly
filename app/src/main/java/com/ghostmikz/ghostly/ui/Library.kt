@@ -1,5 +1,6 @@
 package com.ghostmikz.ghostly.ui
 
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.automirrored.rounded.Sort
@@ -63,7 +64,7 @@ private val LIB_TABS = listOf("Songs", "Artists", "Albums", "Playlists", "Folder
 
 /** Room at the top of a page for the pinned round buttons (drawn by MainActivity, like BitChord's). */
 @Composable
-fun TopBarSpace() = Spacer(Modifier.height(68.dp))
+fun TopBarSpace() = Spacer(Modifier.statusBarsPadding().height(68.dp))
 
 /** The Library's Songs/Artists/Albums/... tab, remembered while the app runs. */
 private val libraryTab = androidx.compose.runtime.mutableIntStateOf(0)
@@ -82,7 +83,13 @@ fun LibraryScreen(
     var tab by libraryTab
     // BitChord's device-library sort; Play and Shuffle follow the order shown.
     val sort by Prefs.localSort.collectAsState()
-    val songs = remember(library.songs, sort) { library.songs.sortedForLibrary(sort) }
+    val allSongs = remember(library.songs, sort) { library.songs.sortedForLibrary(sort) }
+    // BitChord's "search this folder" on the device library: the Songs tab narrowed as you type.
+    var searching by rememberSaveable { mutableStateOf(false) }
+    var query by rememberSaveable { mutableStateOf("") }
+    val songs = remember(allSongs, query) { allSongs.filter { it.matchesQuery(query) } }
+    val searchAction = remember { listOf(PageActions.Action(BitChordIcons.Search, "Search this list") { searching = true }) }
+    if (tab == 0) PageActionsFor(searchAction)
     // Held out here, above the per-tab lists, so the pill slides across a tab
     // change instead of starting over in the new list.
     val tabSlide = rememberSegmentSlide(tab)
@@ -102,6 +109,13 @@ fun LibraryScreen(
             Spacer(Modifier.height(18.dp))
             SegmentedTabs(LIB_TABS, tab, { tab = it }, slide = tabSlide)
             if (tab == 0) SortRow(sort, Prefs::setLocalSort) else Spacer(Modifier.height(8.dp))
+            if (tab == 0 && searching) {
+                ListSearchField(query, { query = it }, onClose = { searching = false; query = "" })
+                if (songs.isEmpty()) {
+                    Text("Nothing here matches \u201c$query\u201d", color = GhostlyColors.TextSecondary, fontSize = 16.sp,
+                        textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(32.dp))
+                }
+            }
         }
     }
     when (tab) {
@@ -217,7 +231,25 @@ fun CollectionScreen(
     emptyText: String = "Nothing here yet.",
     extra: (@Composable () -> Unit)? = null,
 ) {
+    // BitChord's detail-page tools: search this list, and sort its tracks.
+    var searching by rememberSaveable { mutableStateOf(false) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var sortName by rememberSaveable { mutableStateOf(SongSort.DEFAULT.name) }
+    val sort = SongSort.valueOf(sortName)
+    var sortMenu by remember { mutableStateOf(false) }
+    val shown = remember(songs, query, sort) { songs.filter { it.matchesQuery(query) }.sortedForDetail(sort) }
+    val pageActions = remember {
+        listOf(
+            PageActions.Action(BitChordIcons.Search, "Search this list") { searching = true },
+            PageActions.Action(Icons.AutoMirrored.Rounded.Sort, "Sort") { sortMenu = true },
+        )
+    }
+    if (songs.isNotEmpty()) PageActionsFor(pageActions)
     Box(Modifier.fillMaxSize()) {
+    // Where the sort menu drops from: under the sort button in the top bar.
+    Box(Modifier.align(Alignment.TopEnd).padding(top = 60.dp, end = 76.dp)) {
+        SongSortMenu(sortMenu, sort, onSelect = { sortName = it.name }, onDismiss = { sortMenu = false })
+    }
     val listState = rememberLazyListState()
     LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = bottomPad)) {
         item {
@@ -241,27 +273,35 @@ fun CollectionScreen(
                 Spacer(Modifier.height(22.dp))
                 if (songs.isNotEmpty()) {
                     PlayShuffleButtons(
-                        onPlay = { actions.play(songs, 0, false, title) },
-                        onShuffle = { actions.play(songs, 0, true, title) },
+                        onPlay = { actions.play(shown, 0, false, title) },
+                        onShuffle = { actions.play(shown, 0, true, title) },
                     )
                 }
                 extra?.invoke()
                 Spacer(Modifier.height(14.dp))
             }
         }
+        if (searching) item(key = "search") {
+            ListSearchField(query, { query = it }, onClose = { searching = false; query = "" })
+        }
         if (songs.isEmpty()) item {
             Text(emptyText, color = GhostlyColors.TextSecondary, fontSize = 16.sp, textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth().padding(32.dp))
+        } else if (shown.isEmpty()) item {
+            Text("Nothing here matches \u201c$query\u201d", color = GhostlyColors.TextSecondary, fontSize = 16.sp, textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(32.dp))
         }
-        itemsIndexed(songs, key = { _, s -> s.id }) { i, s ->
+        itemsIndexed(shown, key = { _, s -> s.id }) { i, s ->
             Box(Modifier.animateItem()) {
-                SongRow(s, s.id == currentId, { actions.play(songs, i, false, title) }, { SongMenuItems(s, actions, it) },
+                SongRow(s, s.id == currentId, { actions.play(shown, i, false, title) }, { SongMenuItems(s, actions, it) },
                     trackNumber = if (numbered) s.track % 1000 else null, onPlayNext = { actions.playNext(s) })
             }
         }
     }
-    // The header is row 0 (an empty list adds a note after it, but then nothing plays from it).
-    val playingRow = remember(songs, currentId) { songs.indexOfFirst { it.id == currentId }.takeIf { it >= 0 }?.plus(1) }
+    // The header is row 0, then the search field when it is open.
+    val playingRow = remember(shown, currentId, searching) {
+        shown.indexOfFirst { it.id == currentId }.takeIf { it >= 0 }?.plus(if (searching) 2 else 1)
+    }
     LocateTargetFor(listState, playingRow)
     }
 }

@@ -116,6 +116,17 @@ object Prefs {
         edit { putString("local_music_sort", order.name) }
     }
 
+    /**
+     * The folder the listener granted for lyrics files (a document tree URI), or
+     * blank. Only good on this phone, so never in a backup.
+     */
+    private val _lyricsFolder = MutableStateFlow("")
+    val lyricsFolder: StateFlow<String> = _lyricsFolder
+    fun setLyricsFolder(uri: String) {
+        _lyricsFolder.value = uri
+        edit { putString("lyrics_folder", uri) }
+    }
+
     /** "system", "light" or "dark" (Settings > Appearance > Theme). */
     private val _theme = MutableStateFlow("system")
     val theme: StateFlow<String> = _theme
@@ -227,6 +238,7 @@ object Prefs {
     private fun reload() {
         _lastfmUser.value = account.getString("lastfm_user", "").orEmpty()
         _theme.value = sp.getString("theme", "system") ?: "system"
+        _lyricsFolder.value = sp.getString("lyrics_folder", "") ?: ""
         _localSort.value = sp.getString("local_music_sort", null)
             ?.let { saved -> LocalMusicSort.entries.firstOrNull { it.name == saved } } ?: LocalMusicSort.TITLE_ASC
         all.forEach { it.load(sp) }

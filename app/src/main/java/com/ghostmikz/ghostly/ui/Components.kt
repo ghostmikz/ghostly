@@ -1,5 +1,15 @@
 package com.ghostmikz.ghostly.ui
 
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.ui.draw.rotate
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.ArrowUpward
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.foundation.gestures.drag
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.contentDescription
@@ -548,6 +558,7 @@ fun MiniPlayer(
     Row(
         modifier.fillMaxWidth().padding(horizontal = sidePadding).height(64.dp).clip(CircleShape)
             .background(GhostlyColors.MiniBar).border(1.dp, GhostlyColors.BarBorder, CircleShape)
+            .miniTrackSwipe(onNext = { vm.next() }, onPrevious = { vm.previous() })
             .then(dragModifier)
             .bounceClick(scaleDown = 0.97f, haptic = false, onClick = onOpen)
             .padding(start = 10.dp, end = 12.dp),
@@ -887,6 +898,172 @@ fun LocatePlayingButton(modifier: Modifier = Modifier) {
             contentAlignment = Alignment.Center,
         ) {
             Icon(Icons.Rounded.MyLocation, null, tint = if (glass) glassContentColor() else GhostlyColors.Text, modifier = Modifier.size(24.dp))
+        }
+    }
+}
+
+
+// ---------- mini player track swipe ----------
+
+/** How far a sideways swipe on the mini player has to go to change the song (BitChord). */
+private val TRACK_SWIPE_THRESHOLD = 72.dp
+
+/**
+ * BitChord's mini player swipe: sideways through the queue, a left swipe to the
+ * next song and a right one back, matching the full player. Decided once, by the
+ * way the finger is heading as it passes the touch slop: upwards is left alone
+ * for the pull into the player, and a lift inside the slop is the bar's tap.
+ * The song changes when the finger lifts, so one long swipe never skips twice.
+ */
+@Composable
+private fun Modifier.miniTrackSwipe(onNext: () -> Unit, onPrevious: () -> Unit): Modifier {
+    val currentNext by androidx.compose.runtime.rememberUpdatedState(onNext)
+    val currentPrevious by androidx.compose.runtime.rememberUpdatedState(onPrevious)
+    val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
+    return pointerInput(Unit) {
+        val threshold = TRACK_SWIPE_THRESHOLD.toPx()
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false)
+            val pointer = down.id
+            var sideways: androidx.compose.ui.input.pointer.PointerInputChange? = null
+            while (sideways == null) {
+                val change = awaitPointerEvent().changes.firstOrNull { it.id == pointer } ?: return@awaitEachGesture
+                if (!change.pressed || change.isConsumed) return@awaitEachGesture
+                val moved = change.position - down.position
+                if (moved.getDistance() < viewConfiguration.touchSlop) continue
+                // Not sideways: the pull up (or nothing) has it.
+                if (kotlin.math.abs(moved.x) < kotlin.math.abs(moved.y)) return@awaitEachGesture
+                change.consume()
+                sideways = change
+            }
+            var dragged = sideways.position.x - down.position.x
+            val finished = drag(pointer) { change ->
+                dragged += change.position.x - change.previousPosition.x
+                change.consume()
+            }
+            if (!finished) return@awaitEachGesture
+            when {
+                dragged <= -threshold -> { haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress); currentNext() }
+                dragged >= threshold -> { haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress); currentPrevious() }
+            }
+        }
+    }
+}
+
+// ---------- page buttons in the top bar ----------
+
+/**
+ * The round buttons a page asks for in the top bar, beside Settings (BitChord's
+ * detail-page actions: search this list, sort). Drawn over the page by the app,
+ * like the back and Settings buttons, so they share their glass.
+ */
+object PageActions {
+    class Action(val icon: ImageVector, val description: String, val onClick: () -> Unit)
+
+    internal var current by mutableStateOf<List<Action>>(emptyList())
+}
+
+/** Puts [actions] in the top bar while this page is on screen. */
+@Composable
+fun PageActionsFor(actions: List<PageActions.Action>) {
+    androidx.compose.runtime.DisposableEffect(actions) {
+        PageActions.current = actions
+        onDispose { if (PageActions.current === actions) PageActions.current = emptyList() }
+    }
+}
+
+// ---------- search this list ----------
+
+/**
+ * BitChord's DetailSearchField: a pill under a page's header that narrows its
+ * list. Opened by a button, so it comes up focused; the cross clears the text,
+ * or closes the field once there is nothing left to clear.
+ */
+@Composable
+fun ListSearchField(query: String, onQueryChange: (String) -> Unit, onClose: () -> Unit, modifier: Modifier = Modifier) {
+    val focus = remember { androidx.compose.ui.focus.FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    Row(
+        modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 10.dp).height(46.dp)
+            .clip(CircleShape).background(GhostlyColors.Card.copy(alpha = 0.6f))
+            .border(0.5.dp, Color.White.copy(alpha = 0.10f), CircleShape).padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(BitChordIcons.Search, null, tint = GhostlyColors.TextSecondary, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(10.dp))
+        Box(Modifier.weight(1f)) {
+            if (query.isEmpty()) Text("Search this list", color = GhostlyColors.TextSecondary, fontSize = 17.sp, maxLines = 1)
+            androidx.compose.foundation.text.BasicTextField(
+                value = query, onValueChange = onQueryChange, singleLine = true,
+                textStyle = androidx.compose.ui.text.TextStyle(color = GhostlyColors.Text, fontSize = 17.sp, fontFamily = Inter),
+                cursorBrush = androidx.compose.ui.graphics.SolidColor(GhostlyColors.Accent),
+                modifier = Modifier.fillMaxWidth().focusRequester(focus),
+            )
+        }
+        Box(
+            Modifier.size(30.dp).clip(CircleShape).clickable { if (query.isEmpty()) onClose() else onQueryChange("") },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Rounded.Close, if (query.isEmpty()) "Close search" else "Clear search",
+                tint = GhostlyColors.TextSecondary, modifier = Modifier.size(17.dp))
+        }
+    }
+}
+
+/** Whether [song] answers a "search this list" query: title, artist or album. */
+fun Song.matchesQuery(query: String): Boolean = query.isBlank() ||
+    title.contains(query, ignoreCase = true) || artist.contains(query, ignoreCase = true) || album.contains(query, ignoreCase = true)
+
+// ---------- sort a page's tracks ----------
+
+/** BitChord's SongSort for a page's track list: its own order, by title, or by when each song was added. */
+enum class SongSort(val label: String) {
+    DEFAULT("Default"),
+    TITLE_ASC("Title (A to Z)"),
+    TITLE_DESC("Title (Z to A)"),
+    DATE_ADDED_ASC("Date added"),
+    DATE_ADDED_DESC("Date added"),
+}
+
+fun List<Song>.sortedForDetail(sort: SongSort): List<Song> = when (sort) {
+    SongSort.DEFAULT -> this
+    SongSort.TITLE_ASC -> sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.title })
+    SongSort.TITLE_DESC -> sortedWith(compareByDescending(String.CASE_INSENSITIVE_ORDER) { it.title })
+    // Ties keep the page's own order.
+    SongSort.DATE_ADDED_ASC -> withIndex().sortedWith(compareBy<IndexedValue<Song>> { it.value.dateAdded }.thenBy { it.index }).map { it.value }
+    SongSort.DATE_ADDED_DESC -> withIndex().sortedWith(compareByDescending<IndexedValue<Song>> { it.value.dateAdded }.thenBy { it.index }).map { it.value }
+}
+
+/**
+ * BitChord's track-list sort menu: Date added as one row whose arrow shows the
+ * direction (up for newest first) and flips, animated, on a second tap; then
+ * the other orders with a tick on the one in force.
+ */
+@Composable
+fun SongSortMenu(expanded: Boolean, selected: SongSort, onSelect: (SongSort) -> Unit, onDismiss: () -> Unit) {
+    DropdownMenu(expanded, onDismiss, containerColor = GhostlyColors.Card, shape = RoundedCornerShape(14.dp)) {
+        val dateActive = selected == SongSort.DATE_ADDED_ASC || selected == SongSort.DATE_ADDED_DESC
+        val arrowRotation by androidx.compose.animation.core.animateFloatAsState(
+            if (selected == SongSort.DATE_ADDED_ASC) 180f else 0f, androidx.compose.animation.core.tween(200), label = "dateAddedArrow",
+        )
+        DropdownMenuItem(
+            text = { Text("Date added", color = GhostlyColors.Text) },
+            trailingIcon = if (dateActive) {
+                { Icon(Icons.Rounded.ArrowUpward, null, tint = GhostlyColors.Accent, modifier = Modifier.rotate(arrowRotation)) }
+            } else null,
+            onClick = {
+                // First tap: newest first. Again: flip the direction.
+                onSelect(if (selected == SongSort.DATE_ADDED_DESC) SongSort.DATE_ADDED_ASC else SongSort.DATE_ADDED_DESC)
+            },
+        )
+        SongSort.entries.filter { it != SongSort.DATE_ADDED_ASC && it != SongSort.DATE_ADDED_DESC }.forEach { option ->
+            DropdownMenuItem(
+                text = { Text(option.label, color = GhostlyColors.Text) },
+                trailingIcon = if (option == selected) {
+                    { Icon(Icons.Rounded.Check, null, tint = GhostlyColors.Accent) }
+                } else null,
+                onClick = { onSelect(option); onDismiss() },
+            )
         }
     }
 }

@@ -1,5 +1,9 @@
 package com.ghostmikz.ghostly
 
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.ui.draw.rotate
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.runtime.derivedStateOf
@@ -136,6 +140,9 @@ private sealed interface Screen {
 
 private val audioPermission =
     if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_AUDIO else Manifest.permission.READ_EXTERNAL_STORAGE
+
+/** How far a tab scrolls before the top fade is fully in. */
+private val TOP_FADE_RAMP = 120.dp
 
 class MainActivity : ComponentActivity() {
     private val vm: PlayerViewModel by viewModels()
@@ -343,8 +350,14 @@ private fun Main(vm: PlayerViewModel) {
 
     // ---- the tab bar shrinks to a bubble while scrolling down, and comes back on the way up ----
     var collapsed by remember { mutableStateOf(false) }
+    // How far the page on screen has been scrolled down, for the top fade.
+    var pageScroll by remember { mutableFloatStateOf(0f) }
     val scrollWatch = remember {
         object : NestedScrollConnection {
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                pageScroll = (pageScroll - consumed.y).coerceAtLeast(0f)
+                return Offset.Zero
+            }
             var run = 0f
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
                 val dy = available.y
@@ -357,7 +370,7 @@ private fun Main(vm: PlayerViewModel) {
         }
     }
     val page = Page(tab, stack.size, stack.lastOrNull())
-    LaunchedEffect(page) { collapsed = false }
+    LaunchedEffect(page) { collapsed = false; pageScroll = 0f }
     // Liquid Glass (BitChord): only the glass bar folds while scrolling; the default bar stays put.
     val liquid = Prefs.liquidGlass.state.collectAsState().value && isGlassSupported()
     val reduceBlur = Prefs.reduceBlur.state.collectAsState().value
@@ -405,7 +418,9 @@ private fun Main(vm: PlayerViewModel) {
             targetState = page,
             modifier = Modifier.fillMaxSize()
                 .then(if (record) Modifier.layerBackdrop(appBackdrop) else Modifier)
-                .statusBarsPadding().nestedScroll(scrollWatch),
+                // Not padded below the status bar: pages run up behind it, under the top
+                // fade, as in BitChord, and make their own room at the top (TopBarSpace).
+                .nestedScroll(scrollWatch),
             transitionSpec = {
                 val tabSwap = targetState.depth == 0 && initialState.depth == 0
                 if (!motion || tabSwap) EnterTransition.None togetherWith ExitTransition.None
@@ -463,7 +478,7 @@ private fun Main(vm: PlayerViewModel) {
                     onOpenArtist = { name -> if (library.artists.any { it.name == name }) stack += Screen.ArtistScreen(name) },
                     onOpenAlbum = { id -> id?.toLongOrNull()?.takeIf { a -> library.albums.any { it.id == a } }?.let { stack += Screen.AlbumScreen(it) } },
                     onShare = { replayShare = null; showReplayShare = true },
-                    contentPadding = PaddingValues(top = 68.dp, bottom = bottomPad),
+                    contentPadding = PaddingValues(top = 68.dp + WindowInsets.statusBars.asPaddingValues().calculateTopPadding(), bottom = bottomPad),
                     landingPage = top.landing,
                 )
                 is Screen.FolderScreen -> {
@@ -474,12 +489,33 @@ private fun Main(vm: PlayerViewModel) {
             }
         }
 
+        // BitChord's top fade: the page's own colour behind the status bar and the round
+        // buttons, so what scrolls under them fades out instead of running into the clock.
+        // A pushed page has it always; a tab's big heading would be washed out at rest,
+        // so there it comes in as the page scrolls.
+        val statusTop = with(LocalDensity.current) { WindowInsets.statusBars.getTop(this).toDp() }
+        val fadeRampPx = with(LocalDensity.current) { TOP_FADE_RAMP.toPx() }
+        val topFadeAlpha by remember(stack.isEmpty()) {
+            derivedStateOf { if (stack.isNotEmpty()) 1f else (pageScroll / fadeRampPx).coerceIn(0f, 1f) }
+        }
+        BottomFadeScrim(
+            Modifier.align(Alignment.TopCenter).rotate(180f).graphicsLayer { alpha = topFadeAlpha },
+            withMiniPlayer = false, inset = statusTop,
+        )
+
         // Round buttons pinned at the top while the page scrolls under them (BitChord).
         // Back goes through the system back stack, so it also leaves Settings sub-pages one at a time.
         val backDispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
         Row(Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 14.dp, vertical = 8.dp)) {
             if (stack.isNotEmpty()) TopCircle(Icons.Rounded.ChevronLeft, "Back") { backDispatcher?.onBackPressed() }
             Spacer(Modifier.weight(1f))
+            // The page's own buttons (search this list, sort), beside Settings (BitChord).
+            if (stack.lastOrNull() != Screen.Settings) {
+                PageActions.current.forEach { action ->
+                    TopCircle(action.icon, action.description, action.onClick)
+                    Spacer(Modifier.width(10.dp))
+                }
+            }
             if (stack.lastOrNull() != Screen.Settings) TopCircle(Icons.Rounded.Settings, "Settings") { stack += Screen.Settings }
         }
 
