@@ -365,6 +365,22 @@ object ListeningStats {
         }
     }
 
+    /**
+     * The songs played longest in [month], longest first, by MediaStore id; empty
+     * when that month has no record. For Home's "Lost Memories".
+     */
+    suspend fun topSongIdsIn(month: YearMonth, limit: Int = 20): List<Long> = withContext(Dispatchers.IO) {
+        flushAndAwait()
+        read(month.toString())?.tracks.orEmpty()
+            .sortedByDescending { it.ms }
+            .mapNotNull { it.id.toLongOrNull() }
+            .take(limit)
+    }
+
+    /** The same calendar month in earlier years that has a record, most recent first. */
+    fun earlierYearsOf(month: YearMonth): List<YearMonth> =
+        months().filter { it.monthValue == month.monthValue && it.year < month.year }.sortedDescending()
+
     /** Every month with a file, oldest first. */
     fun months(): List<YearMonth> {
         if (!ready) return emptyList()

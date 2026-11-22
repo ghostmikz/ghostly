@@ -56,8 +56,37 @@ fun HomeScreen(library: Library, actions: LibraryActions, bottomPad: Dp, loading
         library.artists.shuffled(Random(LocalDate.now().toEpochDay() + 7)).take(12)
     }
 
+    // Ideas from Namida's home page, in Ghostly's own cards and rows.
+    // Random Picks: a new handful each time Home is opened.
+    val randomPicks = remember(songs) { songs.shuffled().take(30) }
+    // Recent Albums / Artists: the albums and artists behind what was played lately.
+    val recentAlbums = remember(stats, byId, library.albums) {
+        val albumsById = library.albums.associateBy { it.id }
+        stats.entries.sortedByDescending { it.value.lastPlayed }
+            .mapNotNull { byId[it.key]?.albumId }.distinct().mapNotNull { albumsById[it] }.take(12)
+    }
+    val recentArtists = remember(stats, byId, library.artists) {
+        val artistsByName = library.artists.associateBy { it.name }
+        stats.entries.sortedByDescending { it.value.lastPlayed }
+            .mapNotNull { byId[it.key]?.artist }.distinct().mapNotNull { artistsByName[it] }.take(12)
+    }
+    // Top This Week (Namida's "Top recents"), from Replay's listening record.
+    val topWeek by androidx.compose.runtime.produceState(emptyList<Song>(), byId, stats) {
+        value = com.ghostmikz.ghostly.data.stats.ListeningStats
+            .summary(com.ghostmikz.ghostly.data.stats.ReplayPeriod.THIS_WEEK).songs
+            .mapNotNull { byId[it.song.id] }.take(15)
+    }
+    // Lost Memories: what you played most in this month of an earlier year.
+    val lostMemories by androidx.compose.runtime.produceState<Pair<java.time.YearMonth, List<Song>>?>(null, byId) {
+        val stats = com.ghostmikz.ghostly.data.stats.ListeningStats
+        value = stats.earlierYearsOf(java.time.YearMonth.now()).firstNotNullOfOrNull { month ->
+            stats.topSongIdsIn(month).mapNotNull { byId[it] }.takeIf { it.size >= 3 }?.let { month to it }
+        }
+    }
+
     val mixes = buildList {
         add(Mix("Mix for You", "Shuffle All", "Every song on this phone, in a random order.", Color(0xFF33AEF0), songs, true))
+        if (randomPicks.size >= 3) add(Mix("Something different", "Random Picks", "A new handful of your songs every visit.", Color(0xFFF08A3E), randomPicks, false))
         if (most.size >= 3) add(Mix("Made from your plays", "On Repeat", "The songs you keep coming back to.", Color(0xFF8E5BF0), most, false))
         if (favorites.isNotEmpty()) add(Mix("Liked by you", "Liked", "${countText(favorites.size, "song")} you liked.", GhostlyColors.Accent, favorites, true))
         add(Mix("Fresh on your phone", "Recently Added", "The newest files in your library.", Color(0xFF2FB874), added, false))
@@ -88,6 +117,24 @@ fun HomeScreen(library: Library, actions: LibraryActions, bottomPad: Dp, loading
             }
         }
         item {
+            Shelf("Top This Week", topWeek, { "w" + it.id }) { s ->
+                SquareCard(s, s.title, s.artist) { actions.play(topWeek, topWeek.indexOf(s), false, "Top This Week") }
+            }
+        }
+        lostMemories?.let { (month, memories) ->
+            item {
+                val name = month.month.getDisplayName(java.time.format.TextStyle.FULL, java.util.Locale.getDefault()) + " " + month.year
+                Shelf("Lost Memories \u00b7 $name", memories, { "lm" + it.id }) { s ->
+                    SquareCard(s, s.title, s.artist) { actions.play(memories, memories.indexOf(s), false, "Lost Memories") }
+                }
+            }
+        }
+        item {
+            Shelf("Recent Albums", recentAlbums, { "ra" + it.id }) { a ->
+                SquareCard(a.songs.first(), a.title, a.artist) { actions.openAlbum(a.id) }
+            }
+        }
+        item {
             Shelf("Albums for You", dailyAlbums, { "a" + it.id }) { a ->
                 SquareCard(a.songs.first(), a.title, a.artist) { actions.openAlbum(a.id) }
             }
@@ -100,6 +147,11 @@ fun HomeScreen(library: Library, actions: LibraryActions, bottomPad: Dp, loading
         item {
             Shelf("Most Played", most.take(15), { "m" + it.id }) { s ->
                 SquareCard(s, s.title, "${stats[s.id]?.count ?: 0} plays") { actions.play(most, most.indexOf(s), false, "Most Played") }
+            }
+        }
+        item {
+            Shelf("Recent Artists", recentArtists, { "rar" + it.name }) { a ->
+                SquareCard(a.songs.first(), a.name, "", 130.dp, round = true) { actions.openArtist(a.name) }
             }
         }
         item {
