@@ -25,8 +25,8 @@ android {
         applicationId = "com.ghostmikz.ghostly"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.3.0"
         buildConfigField("String", "LASTFM_API_KEY", "\"${prop("LASTFM_API_KEY")}\"")
         buildConfigField("String", "LASTFM_SECRET", "\"${prop("LASTFM_SECRET")}\"")
         // The bit-perfect drivers' native code: phones (ARM) and the x86_64 emulator.
