@@ -101,6 +101,15 @@ import androidx.compose.material.icons.outlined.SwipeRight
 import androidx.compose.material.icons.outlined.TextFields
 import androidx.compose.material.icons.outlined.VolumeMute
 import com.ghostmikz.ghostly.data.BoolPref
+import com.ghostmikz.ghostly.data.Duplicates
+import com.ghostmikz.ghostly.data.MusicRepository
+import com.ghostmikz.ghostly.data.Song
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.VisibilityOff
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import com.ghostmikz.ghostly.data.History
 import com.ghostmikz.ghostly.playback.PlaybackService
 import org.json.JSONObject
@@ -115,7 +124,11 @@ import kotlinx.coroutines.launch
 private enum class Page(val title: String) {
     Main("Settings"), Account("Account & integrations"), Playback("Playback"), Appearance("Appearance"),
     Local("Local Music"), Storage("Storage"), Data("Your data"), Misc("Miscellaneous"),
+    Duplicates("Duplicates"), Hidden("Hidden songs"),
 }
+
+/** Where back goes from a page: Local Music's own pages go back to it. */
+private val Page.parent: Page get() = if (this == Page.Duplicates || this == Page.Hidden) Page.Local else Page.Main
 
 @Composable
 fun SettingsScreen(
@@ -124,9 +137,12 @@ fun SettingsScreen(
     covered: Boolean = false,
     /** True while the library is being read, so "Rescan music" can say so. */
     scanning: Boolean = false,
+    /** The library's songs, for the duplicate finder. */
+    songs: List<Song> = emptyList(),
+    onPlay: (Song) -> Unit = {},
 ) {
     var page by rememberSaveable { mutableStateOf(Page.Main) }
-    BackHandler(enabled = page != Page.Main && !covered) { page = Page.Main }
+    BackHandler(enabled = page != Page.Main && !covered) { page = page.parent }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = bottomPad)) {
         TopBarSpace()
@@ -137,7 +153,9 @@ fun SettingsScreen(
             Page.Account -> AccountPage()
             Page.Playback -> PlaybackPage()
             Page.Appearance -> AppearancePage()
-            Page.Local -> LocalPage(songCount, onRescan, scanning)
+            Page.Local -> LocalPage(songCount, onRescan, scanning, songs) { page = it }
+            Page.Duplicates -> DuplicatesPage(songs, scanning, onRescan, onPlay)
+            Page.Hidden -> HiddenPage(onRescan)
             Page.Storage -> StoragePage()
             Page.Data -> DataPage()
             Page.Misc -> MiscPage()
@@ -161,7 +179,7 @@ private fun MainPage(songCount: Int, open: (Page) -> Unit) {
         Entry(Icons.Outlined.Person, "Account & integrations", "last.fm lastfm scrobble scrobbling now playing sign in account", Page.Account),
         Entry(Icons.Outlined.PlayCircle, "Playback", "skip silence equalizer eq bass audio crossfade output precision pcm bit depth float 16-bit 32-bit sample rate usb dac bit-perfect bitperfect exclusive hi-res volume convert", Page.Playback),
         Entry(Icons.Outlined.Brush, "Appearance", "liquid glass glass performance theme dark mode light mode system reduce animation blur blend colors full-screen cover art album", Page.Appearance),
-        Entry(Icons.Outlined.LibraryMusic, "Local Music", "rescan scan library songs folders filter non-music recordings wav lyrics lrc", Page.Local),
+        Entry(Icons.Outlined.LibraryMusic, "Local Music", "rescan scan library songs folders filter non-music recordings wav lyrics lrc duplicates copies hidden hide", Page.Local),
         Entry(Icons.Outlined.Storage, "Storage", "clear image cache artwork space", Page.Storage),
         Entry(Icons.Outlined.Inventory2, "Your data", "clear history liked favorites export import backup json", Page.Data),
         Entry(Icons.Outlined.MoreHoriz, "Miscellaneous", "swipe play next stop close recents hide volume status bar queue history playing from stats for nerds bitrate", Page.Misc),
@@ -378,7 +396,9 @@ private fun MiscPage() {
 }
 
 @Composable
-private fun LocalPage(songCount: Int, onRescan: () -> Unit, scanning: Boolean) {
+private fun LocalPage(songCount: Int, onRescan: () -> Unit, scanning: Boolean, songs: List<Song>, open: (Page) -> Unit) {
+    val duplicates = remember(songs) { Duplicates.find(songs).size }
+    val hidden by Prefs.hiddenSongs.collectAsState()
     var scanned by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val lyricsFolder by Prefs.lyricsFolder.collectAsState()
@@ -414,6 +434,13 @@ private fun LocalPage(songCount: Int, onRescan: () -> Unit, scanning: Boolean) {
             onRescan(); scanned = true
             com.ghostmikz.ghostly.lyrics.LocalLyrics.forget()
         }
+    }
+    Spacer(Modifier.height(20.dp))
+    Card {
+        NavRow(Icons.Outlined.ContentCopy, "Duplicates", "Songs stored more than once",
+            value = if (duplicates > 0) "$duplicates" else null) { open(Page.Duplicates) }
+        NavRow(Icons.Outlined.VisibilityOff, "Hidden songs", "Songs you hid from the library",
+            value = if (hidden.isNotEmpty()) "${hidden.size}" else null, last = true) { open(Page.Hidden) }
     }
     Note("Ghostly plays the audio files Android knows about, from every folder on the phone.")
 }
@@ -988,3 +1015,159 @@ private fun AlertRule() {
     Box(Modifier.fillMaxWidth().height(0.5.dp).background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.14f)))
 }
 
+
+// ---------- duplicates and hidden songs ----------
+
+@Composable
+private fun DuplicatesPage(songs: List<Song>, scanning: Boolean, onRescan: () -> Unit, onPlay: (Song) -> Unit) {
+    val context = LocalContext.current
+    val groups = remember(songs) { Duplicates.find(songs) }
+    val info by produceState(emptyMap<Long, MusicRepository.FileInfo>(), groups) {
+        value = MusicRepository.fileInfo(context, groups.flatten())
+    }
+    var deleting by remember { mutableStateOf<List<Song>?>(null) }
+    // Android asks the listener itself before a file goes (Android 11 and up).
+    val deleter = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            Toast.makeText(context, "Deleted", Toast.LENGTH_SHORT).show()
+            onRescan()
+        }
+    }
+    fun delete(copies: List<Song>) {
+        if (android.os.Build.VERSION.SDK_INT < 30) return
+        val request = android.provider.MediaStore.createDeleteRequest(context.contentResolver, copies.map { it.uri })
+        deleter.launch(androidx.activity.result.IntentSenderRequest.Builder(request.intentSender).build())
+    }
+    fun hide(copies: List<Song>) {
+        Prefs.hideSongs(copies.map { it.id })
+        onRescan()
+        Toast.makeText(context, if (copies.size == 1) "Song hidden" else "${copies.size} songs hidden", Toast.LENGTH_SHORT).show()
+    }
+
+    Note("Songs with the same title and artist and about the same length. Tap a copy to play it. " +
+        "Hiding keeps the file and only takes it out of Ghostly.")
+    if (groups.isEmpty()) {
+        Spacer(Modifier.height(20.dp))
+        Card {
+            NavRow(Icons.Outlined.ContentCopy, if (scanning) "Looking…" else "No duplicates found", null, last = true, chevron = false) {}
+        }
+        return
+    }
+    groups.forEach { copies ->
+        val best = if (info.isEmpty()) null else Duplicates.best(copies, info)
+        val others = copies.filter { it.id != best?.id }
+        Text(copies.first().title, color = GhostlyColors.Text, fontSize = 17.sp, fontWeight = FontWeight.SemiBold,
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(start = 30.dp, end = 24.dp, top = 26.dp))
+        Text(copies.first().artist, color = GhostlyColors.TextSecondary, fontSize = 15.sp, maxLines = 1,
+            overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 30.dp, end = 24.dp, bottom = 10.dp))
+        Card {
+            copies.forEach { song ->
+                CopyRow(song, info[song.id], isBest = song.id == best?.id, onPlay = { onPlay(song) },
+                    onHide = { hide(listOf(song)) }, onDelete = { deleting = listOf(song) })
+            }
+            if (best != null) {
+                NavRow(Icons.Outlined.VisibilityOff, "Keep the best copy",
+                    if (others.size == 1) "Hides the other one" else "Hides the other ${others.size}",
+                    last = true, chevron = false) { hide(others) }
+            }
+        }
+    }
+
+    deleting?.let { copies ->
+        val name = info[copies.first().id]?.name ?: copies.first().title
+        Confirm("Delete this file?", "$name is removed from the phone, not only from Ghostly.", "Delete",
+            onConfirm = { delete(copies); deleting = null }, onDismiss = { deleting = null })
+    }
+}
+
+/** One copy of a duplicated song: where it is, its format and size, and what can be done with it. */
+@Composable
+private fun CopyRow(
+    song: Song, info: MusicRepository.FileInfo?, isBest: Boolean,
+    onPlay: () -> Unit, onHide: () -> Unit, onDelete: () -> Unit,
+) {
+    var menu by remember { mutableStateOf(false) }
+    val details = buildList {
+        info?.format?.let(::add)
+        info?.kbps?.takeIf { it > 0 }?.let { add("$it kbps") }
+        info?.bytes?.takeIf { it > 0 }?.let { add(String.format(java.util.Locale.ROOT, "%.1f MB", it / 1_048_576.0)) }
+        add(formatLength(song.durationMs))
+    }.joinToString(" · ")
+    Row(Modifier.fillMaxWidth().clickable(onClick = onPlay), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f).padding(start = 20.dp)) {
+            Row(Modifier.padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(info?.name ?: song.title, color = GhostlyColors.Text, fontSize = 17.sp, maxLines = 1,
+                            overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                        if (isBest) Text("Best", color = GhostlyColors.Accent, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(start = 8.dp).clip(CircleShape).background(GhostlyColors.CardHigh)
+                                .padding(horizontal = 8.dp, vertical = 2.dp))
+                    }
+                    Text(song.folder.ifEmpty { "/" }, color = GhostlyColors.TextSecondary, fontSize = 14.sp, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis)
+                    Text(details, color = GhostlyColors.TextSecondary, fontSize = 14.sp)
+                }
+                Box {
+                    Icon(Icons.Outlined.MoreHoriz, "More", tint = GhostlyColors.Text,
+                        modifier = Modifier.padding(horizontal = 10.dp).size(40.dp).clip(CircleShape)
+                            .clickable { menu = true }.padding(8.dp))
+                    DropdownMenu(menu, onDismissRequest = { menu = false }, containerColor = GhostlyColors.Card) {
+                        DropdownMenuItem(text = { Text("Hide from Ghostly", color = GhostlyColors.Text) },
+                            leadingIcon = { Icon(Icons.Outlined.VisibilityOff, null, tint = GhostlyColors.Text) },
+                            onClick = { menu = false; onHide() })
+                        if (android.os.Build.VERSION.SDK_INT >= 30) {
+                            DropdownMenuItem(text = { Text("Delete file", color = GhostlyColors.Text) },
+                                leadingIcon = { Icon(Icons.Outlined.Delete, null, tint = GhostlyColors.Text) },
+                                onClick = { menu = false; onDelete() })
+                        }
+                    }
+                }
+            }
+            HorizontalDivider(thickness = 0.5.dp, color = GhostlyColors.CardHigh)
+        }
+    }
+}
+
+private fun formatLength(ms: Long): String {
+    val s = ms / 1000
+    return "${s / 60}:${(s % 60).toString().padStart(2, '0')}"
+}
+
+@Composable
+private fun HiddenPage(onRescan: () -> Unit) {
+    val context = LocalContext.current
+    val hidden by Prefs.hiddenSongs.collectAsState()
+    val songs by produceState<List<Song>?>(null, hidden) {
+        value = runCatching {
+            MusicRepository.load(context, filterNonMusic = false, includeHidden = true).songs.filter { it.id in hidden }
+        }.getOrDefault(emptyList())
+    }
+    fun unhide(ids: Collection<Long>) {
+        Prefs.unhideSongs(ids)
+        onRescan()
+    }
+    // A hidden file that is gone from the phone has nothing to come back as.
+    LaunchedEffect(songs) {
+        val found = songs ?: return@LaunchedEffect
+        val gone = hidden - found.map { it.id }.toSet()
+        if (gone.isNotEmpty()) Prefs.unhideSongs(gone)
+    }
+    Note("Hidden songs stay on the phone but are left out of the library, search, Home and Android Auto.")
+    Spacer(Modifier.height(20.dp))
+    val list = songs
+    Card {
+        when {
+            list == null -> NavRow(Icons.Outlined.VisibilityOff, "Looking…", null, last = true, chevron = false) {}
+            list.isEmpty() -> NavRow(Icons.Outlined.VisibilityOff, "No hidden songs", null, last = true, chevron = false) {}
+            else -> {
+                list.forEach { song ->
+                    NavRow(Icons.Outlined.Visibility, song.title, "${song.artist} · ${song.folder.ifEmpty { "/" }}",
+                        value = "Unhide", chevron = false) { unhide(listOf(song.id)) }
+                }
+                NavRow(Icons.Outlined.Visibility, "Unhide all", null, last = true, chevron = false) { unhide(list.map { it.id }) }
+            }
+        }
+    }
+}

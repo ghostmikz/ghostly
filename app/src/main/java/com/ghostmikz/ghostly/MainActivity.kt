@@ -451,7 +451,8 @@ private fun Main(vm: PlayerViewModel) {
                     else -> SearchScreen(library, currentId, actions, bottomPad)
                 }
                 Screen.Settings -> SettingsScreen(library.songs.size, vm::loadLibrary, bottomPad, back,
-                    covered = playerOpen || replayStory != null, scanning = libraryLoading)
+                    covered = playerOpen || replayStory != null, scanning = libraryLoading,
+                    songs = library.songs, onPlay = { vm.play(listOf(it), from = "Duplicates") })
                 Screen.Recent -> {
                     val songs = remember(stats, library) {
                         val byId = library.songs.associateBy { it.id }

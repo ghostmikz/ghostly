@@ -43,7 +43,7 @@ internal object QueueStore {
         val ids = sp.getString("ids", null)?.split(',')?.mapNotNull { it.toLongOrNull() } ?: return
         if (ids.isEmpty()) return
         // No permission to read music (yet) means nothing to restore.
-        val songs = runCatching { MusicRepository.load(context, filterNonMusic = false) }.getOrNull()
+        val songs = runCatching { MusicRepository.load(context, filterNonMusic = false, includeHidden = true) }.getOrNull()
             ?.songs?.associateBy { it.id } ?: return
         val index = sp.getInt("index", 0)
         val savedCurrent = ids.getOrNull(index)

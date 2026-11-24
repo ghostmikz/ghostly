@@ -127,6 +127,19 @@ object Prefs {
         edit { putString("lyrics_folder", uri) }
     }
 
+    /**
+     * Songs hidden from the library (Settings > Local Music > Duplicates). Kept by
+     * MediaStore id, which only means something on this phone, so never in a backup.
+     */
+    private val _hiddenSongs = MutableStateFlow<Set<Long>>(emptySet())
+    val hiddenSongs: StateFlow<Set<Long>> = _hiddenSongs
+    fun hideSongs(ids: Collection<Long>) = setHiddenSongs(_hiddenSongs.value + ids)
+    fun unhideSongs(ids: Collection<Long>) = setHiddenSongs(_hiddenSongs.value - ids.toSet())
+    private fun setHiddenSongs(ids: Set<Long>) {
+        _hiddenSongs.value = ids
+        edit { putString("hidden_songs", ids.joinToString(",")) }
+    }
+
     /** "system", "light" or "dark" (Settings > Appearance > Theme). */
     private val _theme = MutableStateFlow("system")
     val theme: StateFlow<String> = _theme
@@ -240,6 +253,8 @@ object Prefs {
         _theme.value = sp.getString("theme", "system") ?: "system"
         // Defensive, like the enum settings: a stray import must not crash every launch.
         _lyricsFolder.value = runCatching { sp.getString("lyrics_folder", "") }.getOrNull() ?: ""
+        _hiddenSongs.value = (runCatching { sp.getString("hidden_songs", "") }.getOrNull() ?: "")
+            .split(',').mapNotNull { it.toLongOrNull() }.toSet()
         _localSort.value = sp.getString("local_music_sort", null)
             ?.let { saved -> LocalMusicSort.entries.firstOrNull { it.name == saved } } ?: LocalMusicSort.TITLE_ASC
         all.forEach { it.load(sp) }
@@ -272,7 +287,7 @@ object Prefs {
      * Never carried by a backup: each turns on full-scale output to a DAC, which
      * only happens behind its own warning in Settings, on this phone.
      */
-    private val NOT_BACKED_UP = setOf("bit_perfect_mode", "usb_allow_fixed_volume", "lyrics_folder")
+    private val NOT_BACKED_UP = setOf("bit_perfect_mode", "usb_allow_fixed_volume", "lyrics_folder", "hidden_songs")
 
     /** Settings as JSON for "Export data". The Last.fm session is left out on purpose. */
     fun exportJson(): JSONObject {

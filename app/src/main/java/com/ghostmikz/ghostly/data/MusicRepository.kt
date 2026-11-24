@@ -48,8 +48,12 @@ object MusicRepository {
     /** Folder names that hold sounds rather than music (used by "Filter non-music audio"). */
     private val NON_MUSIC_FOLDERS = listOf("recordings", "recorder", "call", "voice", "notifications", "ringtones", "alarms", "audiobooks", "podcasts")
 
-    suspend fun load(context: Context, filterNonMusic: Boolean = true): Library = withContext(Dispatchers.IO) {
+    /** [includeHidden] also lists the songs hidden in Settings (the saved queue, the Hidden songs page). */
+    suspend fun load(context: Context, filterNonMusic: Boolean = true, includeHidden: Boolean = false): Library = withContext(Dispatchers.IO) {
+        val hidden = if (includeHidden) emptySet() else Prefs.hiddenSongs.value
         val songs = querySongs(context, onlyMusic = filterNonMusic).filter { s ->
+            s.id !in hidden
+        }.filter { s ->
             !filterNonMusic || (
                 s.durationMs >= 30_000 && !s.isWav &&
                     s.folder.lowercase().split('/').none { part -> NON_MUSIC_FOLDERS.any { part.startsWith(it) } }
@@ -73,6 +77,52 @@ object MusicRepository {
             )
         }.sortedBy { it.name.lowercase() }
         Library(songs.sortedBy { it.title.lowercase() }, albums, artists)
+    }
+
+    /** What the duplicate finder shows about each copy: its file name, format, size and bitrate. */
+    data class FileInfo(val name: String, val format: String, val bytes: Long, val kbps: Int)
+
+    suspend fun fileInfo(context: Context, songs: List<Song>): Map<Long, FileInfo> = withContext(Dispatchers.IO) {
+        if (songs.isEmpty()) return@withContext emptyMap()
+        val durations = songs.associate { it.id to it.durationMs }
+        val cols = buildList {
+            add(MediaStore.Audio.Media._ID); add(MediaStore.Audio.Media.DISPLAY_NAME)
+            add(MediaStore.Audio.Media.MIME_TYPE); add(MediaStore.Audio.Media.SIZE)
+            if (Build.VERSION.SDK_INT >= 30) add(MediaStore.Audio.Media.BITRATE)
+        }.toTypedArray()
+        val out = HashMap<Long, FileInfo>()
+        songs.map { it.id }.chunked(500).forEach { chunk ->
+            runCatching {
+                context.contentResolver.query(
+                    MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, cols,
+                    "${MediaStore.Audio.Media._ID} IN (${chunk.joinToString(",")})", null, null,
+                )?.use { c ->
+                    while (c.moveToNext()) {
+                        val id = c.getLong(0)
+                        val name = c.getString(1).orEmpty()
+                        val bytes = c.getLong(3)
+                        val tagged = if (Build.VERSION.SDK_INT >= 30) c.getLong(4) / 1000 else 0L
+                        val dur = durations[id] ?: 0L
+                        // Size over length: a little high for a big cover, but right for a VBR
+                        // MP3, where the scanner reads one frame's rate (32 kbps for a 258 kbps file).
+                        val estimate = if (dur > 0) bytes * 8 / dur else 0L
+                        val kbps = if (tagged > 0 && tagged * 2 >= estimate) tagged else estimate
+                        out[id] = FileInfo(name, formatName(c.getString(2).orEmpty(), name), bytes, kbps.toInt())
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    private fun formatName(mime: String, name: String): String = when {
+        mime == "audio/mpeg" -> "MP3"
+        "flac" in mime -> "FLAC"
+        "opus" in mime -> "Opus"
+        "ogg" in mime || "vorbis" in mime -> "OGG"
+        "wav" in mime -> "WAV"
+        "mp4" in mime || "m4a" in mime || "aac" in mime -> name.substringAfterLast('.', "M4A").uppercase()
+        else -> name.substringAfterLast('.', "").uppercase().ifEmpty { "Audio" }
     }
 
     private fun querySongs(context: Context, onlyMusic: Boolean): List<Song> {
