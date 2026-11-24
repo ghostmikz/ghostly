@@ -41,6 +41,7 @@ ProleteR, Boogie Belgique, Candlegravity, Poodleplay Arkestra and The Underscore
 - **Listen Now**: mixes and shelves built from your own listening (recently played,
   most played, recently added)
 - **Library**: songs, artists, albums, playlists and folders, plus search
+- **Clean-up tools**: find duplicate songs, and hide songs you never want to see in the library
 - **Playlists**: Liked first, then your own; add songs from any song's menu
 - **Player**: shuffle, repeat, queue, "play next", swipe to play next, volume bar,
   sleep timer (after this song, presets or a custom time)
