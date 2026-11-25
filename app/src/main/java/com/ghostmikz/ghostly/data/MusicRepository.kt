@@ -27,7 +27,7 @@ data class Song(
     val albumArtUri: Uri get() = ContentUris.withAppendedId(ALBUM_ART, albumId)
 
     companion object {
-        val ALBUM_ART: Uri = Uri.parse("content://media/external/audio/albumart")
+        val ALBUM_ART: Uri by lazy { Uri.parse("content://media/external/audio/albumart") }
     }
 }
 
@@ -45,8 +45,21 @@ data class Library(
 object MusicRepository {
     private const val UNKNOWN = "<unknown>"
 
-    /** Folder names that hold sounds rather than music (used by "Filter non-music audio"). */
-    private val NON_MUSIC_FOLDERS = listOf("recordings", "recorder", "call", "voice", "notifications", "ringtones", "alarms", "audiobooks", "podcasts")
+    /**
+     * Words in a folder's name that mean it holds sounds rather than music (used by
+     * "Filter non-music audio"). Whole words, so "Call recordings" is filtered but
+     * "Callum" or "Voices" is not.
+     */
+    private val NON_MUSIC_WORDS = setOf(
+        "recordings", "recording", "recorder", "call", "calls", "voice", "notifications", "ringtones",
+        "alarms", "audiobooks", "audiobook", "podcasts", "podcast",
+        // Names phones write as one word.
+        "voicenotes", "voicerecorder", "callrecordings", "callrecorder", "soundrecorder",
+    )
+    private val WORD_SPLIT = Regex("[^\\p{L}\\p{N}]+")
+
+    internal fun isNonMusicFolder(folder: String): Boolean =
+        folder.lowercase().split(WORD_SPLIT).any { it in NON_MUSIC_WORDS }
 
     /** [includeHidden] also lists the songs hidden in Settings (the saved queue, the Hidden songs page). */
     suspend fun load(context: Context, filterNonMusic: Boolean = true, includeHidden: Boolean = false): Library = withContext(Dispatchers.IO) {
@@ -56,7 +69,7 @@ object MusicRepository {
         }.filter { s ->
             !filterNonMusic || (
                 s.durationMs >= 30_000 && !s.isWav &&
-                    s.folder.lowercase().split('/').none { part -> NON_MUSIC_FOLDERS.any { part.startsWith(it) } }
+                    !isNonMusicFolder(s.folder)
                 )
         }
         val albums = songs.groupBy { it.albumId }.map { (id, list) ->

@@ -9,7 +9,7 @@ import kotlinx.coroutines.flow.StateFlow
 import org.json.JSONObject
 
 /** One on/off setting: readable as a flow by the UI and the playback service. */
-class BoolPref internal constructor(private val key: String, private val default: Boolean) {
+class BoolPref internal constructor(private val key: String, private val default: Boolean, internal val onDevice: Boolean = false) {
     private val flow = MutableStateFlow(default)
     val state: StateFlow<Boolean> = flow
     val value: Boolean get() = flow.value
@@ -18,7 +18,7 @@ class BoolPref internal constructor(private val key: String, private val default
 
     fun set(on: Boolean) {
         flow.value = on
-        Prefs.edit { putBoolean(key, on) }
+        Prefs.edit(onDevice) { putBoolean(key, on) }
     }
 }
 
@@ -50,7 +50,12 @@ class FloatPref internal constructor(private val key: String, private val defaul
 }
 
 /** One choice among an enum's values, saved by name (BitChord's output settings). */
-class EnumPref<E : Enum<E>> internal constructor(private val key: String, private val default: E, private val values: List<E>) {
+class EnumPref<E : Enum<E>> internal constructor(
+    private val key: String,
+    private val default: E,
+    private val values: List<E>,
+    internal val onDevice: Boolean = false,
+) {
     private val flow = MutableStateFlow(default)
     val state: StateFlow<E> = flow
     val value: E get() = flow.value
@@ -64,7 +69,7 @@ class EnumPref<E : Enum<E>> internal constructor(private val key: String, privat
 
     fun set(v: E) {
         flow.value = v
-        Prefs.edit { putString(key, v.name) }
+        Prefs.edit(onDevice) { putString(key, v.name) }
     }
 }
 
@@ -103,7 +108,13 @@ enum class BitPerfectMode {
 object Prefs {
     private lateinit var sp: SharedPreferences
     private lateinit var account: SharedPreferences
+    /**
+     * Settings that only mean something on this phone (or must never come back
+     * without their warning), in a file the backup rules leave out.
+     */
+    private lateinit var device: SharedPreferences
     private const val ACCOUNT_FILE = "ghostly_account"
+    private const val DEVICE_FILE = "ghostly_device"
 
     private val _lastfmUser = MutableStateFlow("")
     val lastfmUser: StateFlow<String> = _lastfmUser
@@ -124,7 +135,7 @@ object Prefs {
     val lyricsFolder: StateFlow<String> = _lyricsFolder
     fun setLyricsFolder(uri: String) {
         _lyricsFolder.value = uri
-        edit { putString("lyrics_folder", uri) }
+        edit(onDevice = true) { putString("lyrics_folder", uri) }
     }
 
     /**
@@ -137,7 +148,7 @@ object Prefs {
     fun unhideSongs(ids: Collection<Long>) = setHiddenSongs(_hiddenSongs.value - ids.toSet())
     private fun setHiddenSongs(ids: Set<Long>) {
         _hiddenSongs.value = ids
-        edit { putString("hidden_songs", ids.joinToString(",")) }
+        edit(onDevice = true) { putString("hidden_songs", ids.joinToString(",")) }
     }
 
     /** "system", "light" or "dark" (Settings > Appearance > Theme). */
@@ -166,13 +177,13 @@ object Prefs {
     /** Prefer an attached USB audio output over the system's normal route. */
     val preferUsbDac = BoolPref("prefer_usb_dac", false)
     /** Unprocessed output to a DAC; see [BitPerfectMode]. */
-    val bitPerfectMode = EnumPref("bit_perfect_mode", BitPerfectMode.OFF, BitPerfectMode.entries)
+    val bitPerfectMode = EnumPref("bit_perfect_mode", BitPerfectMode.OFF, BitPerfectMode.entries, onDevice = true)
     /**
      * Lets direct USB play to a DAC with no volume control Ghostly can set: full
      * scale, with the DAC's own knob (if any) the only volume. Off unless the
      * listener accepts a second warning.
      */
-    val usbAllowFixedVolume = BoolPref("usb_allow_fixed_volume", false)
+    val usbAllowFixedVolume = BoolPref("usb_allow_fixed_volume", false, onDevice = true)
     /**
      * Lets the exclusive output convert a track its DAC can't take as it is, to
      * the DAC's highest format. Off, such a track goes to normal output and no
@@ -244,28 +255,50 @@ object Prefs {
                 .apply()
             sp.edit().remove("lastfm_user").remove("lastfm_session").apply()
         }
+        device = context.applicationContext.getSharedPreferences(DEVICE_FILE, Context.MODE_PRIVATE)
+        moveDeviceSettings(context)
         reload()
         if (lastfmAvailable) LastFM.initialize(BuildConfig.LASTFM_API_KEY, BuildConfig.LASTFM_SECRET)
+    }
+
+    /**
+     * Older installs kept the phone-only settings in the main file, which a cloud
+     * backup carries to a new phone. Moved out once. Full-scale DAC output isn't
+     * moved but reset to off, since it may have come from another phone's backup:
+     * it goes back on only behind its warning. A lyrics folder is kept only if
+     * this phone still holds the permission to read it.
+     */
+    private fun moveDeviceSettings(context: Context) {
+        val old = DEVICE_KEYS.filter { sp.contains(it) }
+        if (old.isEmpty()) return
+        val granted = context.contentResolver.persistedUriPermissions.map { it.uri.toString() }.toSet()
+        val moved = device.edit()
+        runCatching { sp.getString("hidden_songs", null) }.getOrNull()?.let { moved.putString("hidden_songs", it) }
+        runCatching { sp.getString("lyrics_folder", null) }.getOrNull()
+            ?.takeIf { it in granted }?.let { moved.putString("lyrics_folder", it) }
+        moved.apply()
+        sp.edit().apply { old.forEach { remove(it) } }.apply()
     }
 
     private fun reload() {
         _lastfmUser.value = account.getString("lastfm_user", "").orEmpty()
         _theme.value = sp.getString("theme", "system") ?: "system"
         // Defensive, like the enum settings: a stray import must not crash every launch.
-        _lyricsFolder.value = runCatching { sp.getString("lyrics_folder", "") }.getOrNull() ?: ""
-        _hiddenSongs.value = (runCatching { sp.getString("hidden_songs", "") }.getOrNull() ?: "")
+        _lyricsFolder.value = runCatching { device.getString("lyrics_folder", "") }.getOrNull() ?: ""
+        _hiddenSongs.value = (runCatching { device.getString("hidden_songs", "") }.getOrNull() ?: "")
             .split(',').mapNotNull { it.toLongOrNull() }.toSet()
         _localSort.value = sp.getString("local_music_sort", null)
             ?.let { saved -> LocalMusicSort.entries.firstOrNull { it.name == saved } } ?: LocalMusicSort.TITLE_ASC
-        all.forEach { it.load(sp) }
+        all.forEach { it.load(if (it.onDevice) device else sp) }
         numbers.forEach { it.load(sp) }
         floats.forEach { it.load(sp) }
-        choices.forEach { it.load(sp) }
+        choices.forEach { it.load(if (it.onDevice) device else sp) }
         if (!scrobbleOn.value && nowPlayingOn.value) nowPlayingOn.set(false)
         LastFM.sessionKey = account.getString("lastfm_session", null)?.takeIf { it.isNotBlank() }
     }
 
-    internal fun edit(block: SharedPreferences.Editor.() -> Unit) = sp.edit().apply(block).apply()
+    internal fun edit(onDevice: Boolean = false, block: SharedPreferences.Editor.() -> Unit) =
+        (if (onDevice) device else sp).edit().apply(block).apply()
 
     fun linkLastfm(user: String, sessionKey: String) {
         LastFM.sessionKey = sessionKey
@@ -284,10 +317,12 @@ object Prefs {
     }
 
     /**
-     * Never carried by a backup: each turns on full-scale output to a DAC, which
-     * only happens behind its own warning in Settings, on this phone.
+     * Never carried by a backup (they live in [DEVICE_FILE]): the DAC two turn on
+     * full-scale output, which only happens behind its own warning on this phone,
+     * and the other two are this phone's folder grant and MediaStore ids.
      */
-    private val NOT_BACKED_UP = setOf("bit_perfect_mode", "usb_allow_fixed_volume", "lyrics_folder", "hidden_songs")
+    private val DEVICE_KEYS = setOf("bit_perfect_mode", "usb_allow_fixed_volume", "lyrics_folder", "hidden_songs")
+    private val NOT_BACKED_UP = DEVICE_KEYS
 
     /** Settings as JSON for "Export data". The Last.fm session is left out on purpose. */
     fun exportJson(): JSONObject {

@@ -272,7 +272,7 @@ object QueueShuffle {
 
         if (currentIndex !in items.indices || from >= items.size) {
             _enabled.value = true
-                return
+            return
         }
 
         // If canonicalContext is empty, discover it from the player's context tracks

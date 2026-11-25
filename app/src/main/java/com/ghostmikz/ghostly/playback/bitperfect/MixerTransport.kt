@@ -36,6 +36,15 @@ import java.nio.ByteBuffer
  * change either at any time, and a track that silently fell back to the
  * mixer would keep playing under a "bit-perfect" label.
  */
+/**
+ * The USB DAC Android is driving, if any. Outside [MixerTransport] because it
+ * needs nothing newer than API 23: direct USB asks it on any Android version.
+ */
+internal fun usbDacOutput(manager: AudioManager): AudioDeviceInfo? =
+    manager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).firstOrNull {
+        it.type == AudioDeviceInfo.TYPE_USB_DEVICE || it.type == AudioDeviceInfo.TYPE_USB_HEADSET
+    }
+
 @RequiresApi(34)
 internal class MixerTransport private constructor(
     private val manager: AudioManager,
@@ -140,10 +149,7 @@ internal class MixerTransport private constructor(
             .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
             .build()
 
-        fun usbDevice(manager: AudioManager): AudioDeviceInfo? =
-            manager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).firstOrNull {
-                it.type == AudioDeviceInfo.TYPE_USB_DEVICE || it.type == AudioDeviceInfo.TYPE_USB_HEADSET
-            }
+        fun usbDevice(manager: AudioManager): AudioDeviceInfo? = usbDacOutput(manager)
 
         /**
          * The format this DAC would open at for the track: its own when offered.

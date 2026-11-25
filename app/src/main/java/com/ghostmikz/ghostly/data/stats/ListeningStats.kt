@@ -463,10 +463,9 @@ object ListeningStats {
     suspend fun exportJson(): String =
         json.encodeToString(ListSerializer(StoredBucket.serializer()), exportAll())
 
-    /** The other half of [exportJson]. */
-    suspend fun importJson(text: String) {
-        importAll(json.decodeFromString(ListSerializer(StoredBucket.serializer()), text))
-    }
+    /** The other half of [exportJson]: reads [text] without changing anything; throws if invalid. */
+    fun parseImport(text: String): List<StoredBucket> =
+        json.decodeFromString(ListSerializer(StoredBucket.serializer()), text)
 
     /**
      * Replaces everything held with [buckets].

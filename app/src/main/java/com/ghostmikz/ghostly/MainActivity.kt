@@ -160,15 +160,38 @@ class MainActivity : ComponentActivity() {
         Prefs.init(this)
         History.init(this)
         com.ghostmikz.ghostly.data.Playlists.init(this)
+        com.ghostmikz.ghostly.data.SongKeys.init(this)
         ListeningStats.init(this)
         ArtCache.sizeFor(this)
-        if (savedInstanceState == null) takeOpenPlayer(intent)
+        if (savedInstanceState == null) {
+            takeOpenPlayer(intent)
+            takeVoiceSearch(intent)
+        }
         setContent { GhostlyTheme { App(vm) } }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        vm.setVisible(true)
+    }
+
+    override fun onStop() {
+        vm.setVisible(false)
+        super.onStop()
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         takeOpenPlayer(intent)
+        takeVoiceSearch(intent)
+    }
+
+    /** The Assistant or Android Auto asking to play something (MEDIA_PLAY_FROM_SEARCH). */
+    private fun takeVoiceSearch(intent: Intent?) {
+        if (intent?.action != android.provider.MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH) return
+        if (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return
+        vm.playFromSearch(intent.getStringExtra(android.app.SearchManager.QUERY))
+        intent.action = null
     }
 
     /** A tap on a home-screen widget asks for the full player (BitChord's PlayerDeepLink). */

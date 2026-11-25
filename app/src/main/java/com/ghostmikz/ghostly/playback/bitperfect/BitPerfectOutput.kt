@@ -213,7 +213,7 @@ internal object BitPerfectOutput {
             return false
         }
         val usbOutput = context.getSystemService(AudioManager::class.java)
-            ?.let(MixerTransport::usbDevice) != null
+            ?.let(::usbDacOutput) != null
         if (usbOutput) directReleasedAtMs = 0L
         return !usbOutput
     }
@@ -358,7 +358,7 @@ internal object BitPerfectOutput {
         val mode = Prefs.bitPerfectMode.value
         val deviceId = when (mode) {
             BitPerfectMode.USB_ANDROID ->
-                context.getSystemService(AudioManager::class.java)?.let(MixerTransport::usbDevice)?.id ?: NO_DEVICE
+                context.getSystemService(AudioManager::class.java)?.let(::usbDacOutput)?.id ?: NO_DEVICE
             BitPerfectMode.USB_DIRECT ->
                 UsbDirectDevices.manager(context)?.let(UsbDirectDevices::audioDevice)?.deviceId ?: NO_DEVICE
             BitPerfectMode.DAP_EXCLUSIVE ->

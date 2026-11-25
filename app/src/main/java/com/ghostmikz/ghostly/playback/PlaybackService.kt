@@ -121,6 +121,7 @@ class PlaybackService : MediaLibraryService() {
         Prefs.init(this)
         History.init(this)
         com.ghostmikz.ghostly.data.Playlists.init(this)
+        com.ghostmikz.ghostly.data.SongKeys.init(this)
         ListeningStats.init(this)
         com.ghostmikz.ghostly.ui.ArtCache.sizeFor(this)
 

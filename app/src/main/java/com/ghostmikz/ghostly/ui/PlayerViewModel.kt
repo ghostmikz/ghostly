@@ -7,6 +7,10 @@ import com.ghostmikz.ghostly.playback.QueueTier
 import com.ghostmikz.ghostly.playback.QueueShuffle
 import android.app.Application
 import android.content.ComponentName
+import android.database.ContentObserver
+import android.os.Handler
+import android.os.Looper
+import android.provider.MediaStore
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.MediaItem
@@ -18,9 +22,13 @@ import com.ghostmikz.ghostly.data.Library
 import com.ghostmikz.ghostly.data.MusicRepository
 import com.ghostmikz.ghostly.data.Song
 import com.ghostmikz.ghostly.playback.PlaybackService
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
+import java.util.Locale
 import kotlinx.coroutines.guava.await
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -53,6 +61,13 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     val state: StateFlow<PlayerState> = _state
 
     private var controller: MediaController? = null
+    /** Kept so [onCleared] can release a controller that is still connecting. */
+    private val controllerFuture = MediaController.Builder(
+        app, SessionToken(app, ComponentName(app, PlaybackService::class.java)),
+    ).buildAsync()
+    /** Whether the app is on screen; the position is only polled while it is. */
+    private val visible = MutableStateFlow(true)
+    fun setVisible(on: Boolean) { visible.value = on }
 
     /**
      * BitChord's playhead for the lyrics: the position with the moment it was
@@ -66,8 +81,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         viewModelScope.launch {
-            val token = SessionToken(app, ComponentName(app, PlaybackService::class.java))
-            val c = MediaController.Builder(app, token).buildAsync().await()
+            val c = controllerFuture.await()
             controller = c
             c.addListener(object : Player.Listener {
                 override fun onEvents(player: Player, events: Player.Events) = refresh()
@@ -76,6 +90,10 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             launch { QueueShuffle.enabled.collect { refresh() } }
             refresh()
             while (isActive) {
+                if (!visible.value) {
+                    visible.first { it }
+                    refresh()
+                }
                 if (c.isPlaying) {
                     _state.value = _state.value.copy(positionMs = c.currentPosition)
                     playhead.report(c.currentPosition)
@@ -85,7 +103,31 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Files added, removed or retagged on the phone: the library is read again once
+     * the media scanner has settled, and only while the app is on screen.
+     */
+    private var watchingMedia = false
+    private var mediaReload: Job? = null
+    private val mediaObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
+        override fun onChange(selfChange: Boolean) {
+            mediaReload?.cancel()
+            mediaReload = viewModelScope.launch {
+                delay(MEDIA_SETTLE_MS)
+                visible.first { it }
+                loadLibrary()
+            }
+        }
+    }
+
     fun loadLibrary() {
+        if (!watchingMedia) {
+            watchingMedia = runCatching {
+                getApplication<Application>().contentResolver.registerContentObserver(
+                    MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, true, mediaObserver,
+                )
+            }.isSuccess
+        }
         viewModelScope.launch {
             _loading.value = true
             ArtCache.forgetMissing()
@@ -93,6 +135,8 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             byId = _library.value.songs.associateBy { it.id.toString() }
             _loading.value = false
             refresh()
+            // Playlists and history follow songs whose ids changed (a restore, a rescan).
+            com.ghostmikz.ghostly.data.SongKeys.reconcile(getApplication<Application>())
         }
     }
 
@@ -148,6 +192,27 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         }
         c.prepare()
         c.play()
+    }
+
+    /**
+     * "Play <something> on Ghostly" from the Assistant or a car: the songs whose
+     * title, artist or album hold every word, else (an empty or unmatched query)
+     * the whole library shuffled. Waits for the player and library on a cold start.
+     */
+    fun playFromSearch(query: String?) {
+        viewModelScope.launch {
+            val songs = withTimeoutOrNull(SEARCH_WAIT_MS) {
+                controllerFuture.await()
+                while (controller == null) delay(50)
+                _library.first { it.songs.isNotEmpty() }.songs
+            } ?: return@launch
+            val words = query.orEmpty().lowercase(Locale.ROOT).split(Regex("\\s+")).filter { it.isNotEmpty() }
+            val found = if (words.isEmpty()) emptyList() else songs.filter { s ->
+                val text = "${s.title} ${s.artist} ${s.album}".lowercase(Locale.ROOT)
+                words.all { it in text }
+            }
+            if (found.isNotEmpty()) play(found, from = "Search") else play(songs, shuffle = true)
+        }
     }
 
     fun togglePlay() {
@@ -225,7 +290,8 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     override fun onCleared() {
-        controller?.release()
+        MediaController.releaseFuture(controllerFuture)
+        if (watchingMedia) getApplication<Application>().contentResolver.unregisterContentObserver(mediaObserver)
         super.onCleared()
     }
 }
@@ -260,3 +326,9 @@ private fun MediaItem.asSong(): Song {
         track = 0, year = 0, dateAdded = 0, folder = "",
     )
 }
+
+/** The scanner reports a copied album file by file; wait for it to finish. */
+private const val MEDIA_SETTLE_MS = 3_000L
+
+/** How long a voice request waits for the player and library before giving up. */
+private const val SEARCH_WAIT_MS = 15_000L

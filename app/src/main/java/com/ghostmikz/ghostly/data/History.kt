@@ -65,20 +65,42 @@ object History {
     }
 
     /**
-     * Likes are imported through [Playlists] (they live in Liked) only when the
-     * backup has no playlists of its own; otherwise Liked comes from there.
+     * Songs that now have a different id ([SongKeys]). Two old ids landing on one
+     * song add their plays together and keep the later last play.
      */
-    fun importJson(root: JSONObject, likesFromHere: Boolean = true) {
+    fun remap(moves: Map<Long, Long>) {
+        val merged = HashMap<Long, Stats>()
+        _stats.value.forEach { (id, s) ->
+            val to = moves[id] ?: id
+            val had = merged[to]
+            merged[to] = if (had == null) s else Stats(had.count + s.count, maxOf(had.lastPlayed, s.lastPlayed))
+        }
+        _stats.value = merged
+        save()
+    }
+
+    /** An export's history, read and checked but not applied yet. */
+    class Import internal constructor(internal val plays: Map<Long, Stats>, internal val favorites: List<Long>)
+
+    /** Reads [root] without changing anything; throws if it isn't a valid history. */
+    fun parseImport(root: JSONObject): Import {
         val plays = root.optJSONObject("plays") ?: JSONObject()
-        _stats.value = plays.keys().asSequence().associate { k ->
+        val stats = plays.keys().asSequence().associate { k ->
             val o = plays.getJSONObject(k)
             k.toLong() to Stats(o.getInt("c"), o.getLong("t"))
         }
+        val fav = root.optJSONArray("favorites") ?: JSONArray()
+        return Import(stats, (0 until fav.length()).map { fav.getLong(it) })
+    }
+
+    /**
+     * Likes are imported through [Playlists] (they live in Liked) only when the
+     * backup has no playlists of its own; otherwise Liked comes from there.
+     */
+    fun applyImport(data: Import, likesFromHere: Boolean = true) {
+        _stats.value = data.plays
         save()
-        if (likesFromHere) {
-            val fav = root.optJSONArray("favorites") ?: JSONArray()
-            Playlists.replaceLiked((0 until fav.length()).map { fav.getLong(it) })
-        }
+        if (likesFromHere) Playlists.replaceLiked(data.favorites)
     }
 
     @Synchronized

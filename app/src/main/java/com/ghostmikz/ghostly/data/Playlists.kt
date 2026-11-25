@@ -132,8 +132,16 @@ object Playlists {
 
     fun exportJson(): JSONObject = toJson(_playlists.value)
 
-    fun importJson(o: JSONObject) {
-        synchronized(lock) { publish(parse(o)); save() }
+    /** Songs that now have a different id ([SongKeys]): every playlist follows them. */
+    fun remap(moves: Map<Long, Long>) = mutate { list ->
+        list.map { p -> p.copy(songIds = p.songIds.map { moves[it] ?: it }.distinct()) }
+    }
+
+    /** Reads an export's playlists without changing anything. */
+    fun parseImport(o: JSONObject): List<Playlist> = parse(o)
+
+    fun applyImport(list: List<Playlist>) {
+        synchronized(lock) { publish(list); save() }
     }
 
     private inline fun mutate(change: (List<Playlist>) -> List<Playlist>) {

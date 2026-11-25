@@ -72,6 +72,8 @@ android {
         compose = true
         buildConfig = true
     }
+    // Plain JVM tests of the app's own logic; Android calls they don't make return defaults.
+    testOptions { unitTests.isReturnDefaultValues = true }
 }
 
 kotlin {
@@ -91,14 +93,16 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.core:core-ktx:1.15.0")
 
-    implementation("androidx.media3:media3-exoplayer:1.11.0")
-    implementation("androidx.media3:media3-session:1.11.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-guava:1.9.0")
-    implementation("androidx.palette:palette-ktx:1.0.0")
+    implementation("androidx.media3:media3-exoplayer:1.11.1")
+    implementation("androidx.media3:media3-session:1.11.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-guava:1.11.0")
+    implementation("androidx.palette:palette-ktx:1.1.0")
 
     // Last.fm only
     implementation("io.ktor:ktor-client-okhttp:3.5.2")
     implementation("io.ktor:ktor-client-content-negotiation:3.5.2")
     implementation("io.ktor:ktor-serialization-kotlinx-json:3.5.2")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
+
+    testImplementation("junit:junit:4.13.2")
 }

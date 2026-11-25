@@ -1,10 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Android 12+: cloud backup and device-to-device transfer, minus the Last.fm sign-in. -->
+<!--
+  Android 12+: cloud backup and device-to-device transfer, minus the Last.fm
+  sign-in and what only means something on this phone.
+-->
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="sharedpref" path="ghostly_account.xml" />
+        <exclude domain="sharedpref" path="ghostly_device.xml" />
+        <exclude domain="sharedpref" path="ghostly_queue.xml" />
+        <exclude domain="sharedpref" path="ghostly_widget.xml" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="sharedpref" path="ghostly_account.xml" />
+        <exclude domain="sharedpref" path="ghostly_device.xml" />
+        <exclude domain="sharedpref" path="ghostly_queue.xml" />
+        <exclude domain="sharedpref" path="ghostly_widget.xml" />
     </device-transfer>
 </data-extraction-rules>

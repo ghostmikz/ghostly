@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Android 6-11 cloud backup: everything except the Last.fm sign-in. -->
+<!--
+  Android 6-11 cloud backup: everything except the Last.fm sign-in and what only
+  means something on this phone (phone-only settings, the saved queue, the widget).
+-->
 <full-backup-content>
     <exclude domain="sharedpref" path="ghostly_account.xml" />
+    <exclude domain="sharedpref" path="ghostly_device.xml" />
+    <exclude domain="sharedpref" path="ghostly_queue.xml" />
+    <exclude domain="sharedpref" path="ghostly_widget.xml" />
 </full-backup-content>

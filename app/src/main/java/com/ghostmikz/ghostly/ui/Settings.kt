@@ -445,6 +445,15 @@ private fun LocalPage(songCount: Int, onRescan: () -> Unit, scanning: Boolean, s
     Note("Ghostly plays the audio files Android knows about, from every folder on the phone.")
 }
 
+/** An export file, fully read and checked, ready to apply. */
+private class ParsedImport(
+    val settings: JSONObject?,
+    val history: History.Import?,
+    val playlists: List<com.ghostmikz.ghostly.data.Playlist>?,
+    val listening: List<com.ghostmikz.ghostly.data.stats.StoredBucket>?,
+    val songKeys: Map<Long, String>?,
+)
+
 @Composable
 private fun DataPage() {
     val stats by History.stats.collectAsState()
@@ -459,6 +468,7 @@ private fun DataPage() {
                 val json = JSONObject().put("app", "ghostly").put("version", 1)
                     .put("settings", Prefs.exportJson()).put("history", History.exportJson())
                     .put("playlists", com.ghostmikz.ghostly.data.Playlists.exportJson())
+                    .put("songKeys", com.ghostmikz.ghostly.data.SongKeys.exportJson())
                     // Replay's monthly numbers, as BitChord's Backup carries them.
                     .put("listening", org.json.JSONArray(ListeningStats.exportJson()))
                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
@@ -471,22 +481,31 @@ private fun DataPage() {
     val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
-            // Read and checked off the main thread before anything is changed, so a
-            // bad file leaves this phone's data exactly as it was.
-            val json = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            // Every part is read and checked off the main thread before anything is
+            // changed, so a bad file leaves this phone's data exactly as it was.
+            val parsed = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 runCatching {
-                    JSONObject(context.contentResolver.openInputStream(uri)!!.use { it.readBytes().decodeToString() })
-                        .takeIf { it.optString("app") == "ghostly" }
+                    val json = JSONObject(context.contentResolver.openInputStream(uri)!!.use { it.readBytes().decodeToString() })
+                    require(json.optString("app") == "ghostly")
+                    ParsedImport(
+                        settings = json.optJSONObject("settings"),
+                        history = json.optJSONObject("history")?.let(History::parseImport),
+                        playlists = json.optJSONObject("playlists")?.let(com.ghostmikz.ghostly.data.Playlists::parseImport),
+                        listening = json.optJSONArray("listening")?.let { ListeningStats.parseImport(it.toString()) },
+                        songKeys = json.optJSONObject("songKeys")?.let(com.ghostmikz.ghostly.data.SongKeys::parseImport),
+                    )
                 }.getOrNull()
             }
-            val ok = json != null && runCatching {
-                val playlists = json.optJSONObject("playlists")
-                json.optJSONObject("settings")?.let(Prefs::importJson)
-                json.optJSONObject("history")?.let { History.importJson(it, likesFromHere = playlists == null) }
-                playlists?.let(com.ghostmikz.ghostly.data.Playlists::importJson)
-                json.optJSONArray("listening")?.let { l ->
-                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { ListeningStats.importJson(l.toString()) }
+            val ok = parsed != null && runCatching {
+                parsed.settings?.let(Prefs::importJson)
+                parsed.history?.let { History.applyImport(it, likesFromHere = parsed.playlists == null) }
+                parsed.playlists?.let(com.ghostmikz.ghostly.data.Playlists::applyImport)
+                parsed.listening?.let { buckets ->
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { ListeningStats.importAll(buckets) }
                 }
+                // An export from another phone: find its songs on this one.
+                parsed.songKeys?.let(com.ghostmikz.ghostly.data.SongKeys::applyImport)
+                com.ghostmikz.ghostly.data.SongKeys.reconcile(context)
             }.isSuccess
             Toast.makeText(context, if (ok) "Data imported" else "That file is not a Ghostly export", Toast.LENGTH_SHORT).show()
         }

@@ -13,10 +13,16 @@ import java.util.concurrent.Executors
 internal object SafeFiles {
     private val writer = Executors.newSingleThreadExecutor { r -> Thread(r, "ghostly-files").apply { isDaemon = true } }
 
-    /** The file's text, or null when it doesn't exist yet. */
+    /**
+     * The file's text, or null when it doesn't exist yet. A file that exists but
+     * can't be read is set aside first, since the next write replaces it.
+     */
     fun read(file: File): String? {
         val atomic = AtomicFile(file)
-        return if (file.exists() || File(file.path + ".new").exists()) runCatching { String(atomic.readFully()) }.getOrNull() else null
+        if (!file.exists() && !File(file.path + ".new").exists()) return null
+        return runCatching { String(atomic.readFully()) }
+            .onFailure { setAside(file) }
+            .getOrNull()
     }
 
     /** Queues [text] to replace [file]; [text] is taken now, so later changes can't leak into it. */
