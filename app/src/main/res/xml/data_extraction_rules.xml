@@ -9,11 +9,13 @@
         <exclude domain="sharedpref" path="ghostly_device.xml" />
         <exclude domain="sharedpref" path="ghostly_queue.xml" />
         <exclude domain="sharedpref" path="ghostly_widget.xml" />
+        <exclude domain="file" path="scrobble_queue.json" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="sharedpref" path="ghostly_account.xml" />
         <exclude domain="sharedpref" path="ghostly_device.xml" />
         <exclude domain="sharedpref" path="ghostly_queue.xml" />
         <exclude domain="sharedpref" path="ghostly_widget.xml" />
+        <exclude domain="file" path="scrobble_queue.json" />
     </device-transfer>
 </data-extraction-rules>

@@ -10,7 +10,6 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.layout.layout
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.ghostmikz.ghostly.data.Prefs
@@ -64,7 +63,7 @@ internal val renderEffectBlurSupported: Boolean
     get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
 
 @Composable
-internal fun appLanguageTag(): String = LocalContext.current.resources.configuration.locales.get(0).toLanguageTag()
+internal fun appLanguageTag(): String = androidx.compose.ui.platform.LocalConfiguration.current.locales.get(0).toLanguageTag()
 
 internal fun DrawScope.clipShiftedDown(left: Float, top: Float, right: Float, bottom: Float, dy: Float, block: DrawScope.() -> Unit) {
     clipRect(left = left, top = top, right = right, bottom = bottom) { translate(top = dy) { block() } }

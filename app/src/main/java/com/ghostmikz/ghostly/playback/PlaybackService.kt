@@ -123,6 +123,7 @@ class PlaybackService : MediaLibraryService() {
         com.ghostmikz.ghostly.data.Playlists.init(this)
         com.ghostmikz.ghostly.data.SongKeys.init(this)
         ListeningStats.init(this)
+        com.ghostmikz.ghostly.lastfm.ScrobbleQueue.init(this)
         com.ghostmikz.ghostly.ui.ArtCache.sizeFor(this)
 
         // Two identical players, as BitChord: the session's, and a standby the next
@@ -190,7 +191,7 @@ class PlaybackService : MediaLibraryService() {
 
             private fun record(item: MediaItem?) {
                 if (recorded) return
-                item?.mediaId?.toLongOrNull()?.let { History.recordPlay(it); recorded = true }
+                item?.mediaId?.toLongOrNull()?.let { History.touch(it); recorded = true }
             }
         }
         player.addListener(playbackListener)
@@ -254,8 +255,12 @@ class PlaybackService : MediaLibraryService() {
                 if (fresh && player.isPlaying) {
                     manager.onPlayerStateChanged(true, player.currentMediaItem?.toScrobbleTrack(), player.duration.takeIf { it > 0 })
                 }
+                // Scrobbles saved while offline or signed out go now.
+                if (fresh) flushScrobbles()
             }
         }
+
+        runCatching { getSystemService(android.net.ConnectivityManager::class.java)?.registerDefaultNetworkCallback(networkCallback) }
 
         // Follow the "Skip silence" setting live.
         scope.launch { Prefs.skipSilence.collect { player.skipSilenceEnabled = it; spare.skipSilenceEnabled = it } }
@@ -291,6 +296,19 @@ class PlaybackService : MediaLibraryService() {
         scope.launch { QueueShuffle.enabled.collect { publishWidgetState(); QueueStore.save(this@PlaybackService, player) } }
         // A like from the app or the player moves the widget's star too.
         scope.launch { History.favorites.collect { publishWidgetState() } }
+    }
+
+    /** Sends the scrobbles waiting in [com.ghostmikz.ghostly.lastfm.ScrobbleQueue], when scrobbling is on. */
+    private fun flushScrobbles() {
+        if (scrobbler == null || com.ghostmikz.ghostly.lastfm.ScrobbleQueue.waiting.value.isEmpty()) return
+        scope.launch { com.ghostmikz.ghostly.lastfm.ScrobbleQueue.flush() }
+    }
+
+    /** The internet coming back sends what waited for it. */
+    private val networkCallback = object : android.net.ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: android.net.Network) {
+            scope.launch { flushScrobbles() }
+        }
     }
 
     private fun buildPlayer(owns: Boolean): ExoPlayer = ExoPlayer.Builder(this, renderers())
@@ -688,7 +706,14 @@ class PlaybackService : MediaLibraryService() {
             // Like and Shuffle are this app's own (its widget and UI); other apps that
             // connect for playback controls get the standard commands only.
             val own = controller.packageName == packageName
-            val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon().apply {
+            // Browsing the library only for Ghostly, the system and Android Auto
+            // (BrowseAccess); every other app gets the playback controls alone.
+            val base = if (BrowseAccess.mayBrowse(this@PlaybackService, controller)) {
+                MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS
+            } else {
+                MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS
+            }
+            val commands = base.buildUpon().apply {
                 if (own) {
                     add(SessionCommand(ACTION_TOGGLE_FAVORITE, Bundle.EMPTY))
                     add(SessionCommand(ACTION_TOGGLE_SHUFFLE, Bundle.EMPTY))
@@ -712,6 +737,33 @@ class PlaybackService : MediaLibraryService() {
                 else -> return Futures.immediateFuture(SessionResult(SessionError.ERROR_NOT_SUPPORTED))
             }
             return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+        }
+
+        /**
+         * Play pressed on headphones, a car or the system's media card after the
+         * app was closed: the saved queue, where it was left.
+         */
+        override fun onPlaybackResumption(
+            mediaSession: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            isForPlayback: Boolean,
+        ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> = scope.future {
+            val player = mediaSession.player
+            if (player.mediaItemCount > 0) {
+                // Already restored (the service's own restore got there first).
+                return@future MediaSession.MediaItemsWithStartPosition(
+                    List(player.mediaItemCount) { player.getMediaItemAt(it) },
+                    player.currentMediaItemIndex.coerceAtLeast(0),
+                    player.currentPosition.coerceAtLeast(0),
+                )
+            }
+            val saved = QueueStore.load(this@PlaybackService)
+                ?: throw UnsupportedOperationException("Nothing to resume")
+            if (isForPlayback) {
+                QueueShuffle.setEnabled(saved.shuffle)
+                player.repeatMode = saved.repeat
+            }
+            MediaSession.MediaItemsWithStartPosition(saved.items, saved.index, saved.positionMs)
         }
 
         override fun onGetLibraryRoot(
@@ -869,6 +921,7 @@ class PlaybackService : MediaLibraryService() {
     }
 
     override fun onDestroy() {
+        runCatching { getSystemService(android.net.ConnectivityManager::class.java)?.unregisterNetworkCallback(networkCallback) }
         outputReconfigureJob?.cancel()
         audioManager?.unregisterAudioDeviceCallback(outputDeviceCallback)
         UsbDirectDevices.onChanged = null

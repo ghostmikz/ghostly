@@ -8,4 +8,5 @@
     <exclude domain="sharedpref" path="ghostly_device.xml" />
     <exclude domain="sharedpref" path="ghostly_queue.xml" />
     <exclude domain="sharedpref" path="ghostly_widget.xml" />
+    <exclude domain="file" path="scrobble_queue.json" />
 </full-backup-content>

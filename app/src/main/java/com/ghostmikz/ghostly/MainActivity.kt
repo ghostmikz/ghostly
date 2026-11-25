@@ -148,8 +148,11 @@ class MainActivity : ComponentActivity() {
     private val vm: PlayerViewModel by viewModels()
 
     // Volume keys move the DAC's own volume while direct USB output owns it (BitChord).
-    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean =
-        handleDacVolumeKey(event) || super.dispatchKeyEvent(event)
+    override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent): Boolean =
+        handleDacVolumeKey(event) || super.onKeyDown(keyCode, event)
+
+    override fun onKeyUp(keyCode: Int, event: android.view.KeyEvent): Boolean =
+        handleDacVolumeKey(event) || super.onKeyUp(keyCode, event)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge(
@@ -162,6 +165,7 @@ class MainActivity : ComponentActivity() {
         com.ghostmikz.ghostly.data.Playlists.init(this)
         com.ghostmikz.ghostly.data.SongKeys.init(this)
         ListeningStats.init(this)
+        com.ghostmikz.ghostly.lastfm.ScrobbleQueue.init(this)
         ArtCache.sizeFor(this)
         if (savedInstanceState == null) {
             takeOpenPlayer(intent)

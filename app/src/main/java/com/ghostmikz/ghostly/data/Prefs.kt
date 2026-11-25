@@ -146,6 +146,12 @@ object Prefs {
     val hiddenSongs: StateFlow<Set<Long>> = _hiddenSongs
     fun hideSongs(ids: Collection<Long>) = setHiddenSongs(_hiddenSongs.value + ids)
     fun unhideSongs(ids: Collection<Long>) = setHiddenSongs(_hiddenSongs.value - ids.toSet())
+    /** Hidden songs whose file now has a different id (a rebuilt media list) stay hidden. */
+    fun remapHidden(moves: Map<Long, Long>) {
+        val now = _hiddenSongs.value
+        if (now.none { it in moves }) return
+        setHiddenSongs(now.map { moves[it] ?: it }.toSet())
+    }
     private fun setHiddenSongs(ids: Set<Long>) {
         _hiddenSongs.value = ids
         edit(onDevice = true) { putString("hidden_songs", ids.joinToString(",")) }
@@ -308,6 +314,7 @@ object Prefs {
     }
 
     fun unlinkLastfm() {
+        com.ghostmikz.ghostly.lastfm.ScrobbleQueue.clear()
         LastFM.sessionKey = null
         _lastfmUser.value = ""
         account.edit().remove("lastfm_user").remove("lastfm_session").apply()

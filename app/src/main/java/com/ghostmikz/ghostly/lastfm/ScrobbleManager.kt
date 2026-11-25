@@ -21,11 +21,31 @@ data class ScrobbleTrack(
     val durationMs: Long,
 )
 
+/** Where scrobbles go: Last.fm, or a stand-in in the tests. */
+interface ScrobbleSender {
+    suspend fun scrobble(artist: String, track: String, timestamp: Long, album: String?, duration: Int): Result<*>
+    suspend fun nowPlaying(artist: String, track: String, album: String?, duration: Int?): Result<*>
+}
+
+object LastFmSender : ScrobbleSender {
+    /** Saved first, then sent with anything still waiting ([ScrobbleQueue]), so no scrobble is lost offline. */
+    override suspend fun scrobble(artist: String, track: String, timestamp: Long, album: String?, duration: Int): Result<*> {
+        ScrobbleQueue.add(ScrobbleQueue.Pending(artist, track, album, duration, timestamp))
+        ScrobbleQueue.flush()
+        return Result.success(Unit)
+    }
+
+    override suspend fun nowPlaying(artist: String, track: String, album: String?, duration: Int?) =
+        LastFM.updateNowPlaying(artist = artist, track = track, album = album, duration = duration)
+}
+
 class ScrobbleManager(
     private val scope: CoroutineScope,
     var minSongDuration: Int = 30,
     var scrobbleDelayPercent: Float = 0.5f,
     var scrobbleDelaySeconds: Int = 180,
+    private val sender: ScrobbleSender = LastFmSender,
+    private val clock: () -> Long = System::currentTimeMillis,
 ) {
     private var scrobbleJob: Job? = null
     private var scrobbleRemainingMillis: Long = 0L
@@ -48,7 +68,7 @@ class ScrobbleManager(
         durationMs: Long? = null,
     ) {
         if (song == null) return
-        songStartedAt = System.currentTimeMillis() / 1000
+        songStartedAt = clock() / 1000
         songStarted = true
         startScrobbleTimer(song, durationMs)
         if (useNowPlaying) {
@@ -88,7 +108,7 @@ class ScrobbleManager(
             markScrobbled()
             return
         }
-        scrobbleTimerStartedAt = System.currentTimeMillis()
+        scrobbleTimerStartedAt = clock()
         scrobbleJob =
             scope.launch {
                 delay(scrobbleRemainingMillis)
@@ -100,7 +120,7 @@ class ScrobbleManager(
     private fun pauseScrobbleTimer() {
         scrobbleJob?.cancel()
         if (scrobbleTimerStartedAt != 0L) {
-            val elapsed = System.currentTimeMillis() - scrobbleTimerStartedAt
+            val elapsed = clock() - scrobbleTimerStartedAt
             scrobbleRemainingMillis -= elapsed
             if (scrobbleRemainingMillis < 0) scrobbleRemainingMillis = 0
             scrobbleTimerStartedAt = 0L
@@ -110,7 +130,7 @@ class ScrobbleManager(
     private fun resumeScrobbleTimer(song: ScrobbleTrack) {
         if (scrobbleRemainingMillis <= 0) return
         scrobbleJob?.cancel()
-        scrobbleTimerStartedAt = System.currentTimeMillis()
+        scrobbleTimerStartedAt = clock()
         scrobbleJob =
             scope.launch {
                 delay(scrobbleRemainingMillis)
@@ -136,15 +156,16 @@ class ScrobbleManager(
     private fun scrobbleSong(song: ScrobbleTrack, durationSeconds: Int) {
         val scrobbleArtist = song.artist.forScrobble()
         scope.launch {
-            LastFM
+            val startedAt = songStartedAt
+            sender
                 .scrobble(
                     artist = scrobbleArtist,
                     track = song.title,
-                    duration = durationSeconds,
-                    timestamp = songStartedAt,
+                    timestamp = startedAt,
                     album = song.album,
+                    duration = durationSeconds,
                 ).onSuccess {
-                    Log.d(TAG, "Scrobbled: ${song.title} by ${song.artist}")
+                    Log.d(TAG, "Scrobble saved: ${song.title} by ${song.artist}")
                 }.onFailure { throwable ->
                     if (throwable is CancellationException) throw throwable
                     Log.e(TAG, "Failed to scrobble: ${song.title}", throwable)
@@ -155,8 +176,8 @@ class ScrobbleManager(
     private fun updateNowPlaying(song: ScrobbleTrack) {
         val scrobbleArtist = song.artist.forScrobble()
         scope.launch {
-            LastFM
-                .updateNowPlaying(
+            sender
+                .nowPlaying(
                     artist = scrobbleArtist,
                     track = song.title,
                     album = song.album,

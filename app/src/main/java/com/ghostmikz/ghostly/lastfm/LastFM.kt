@@ -193,6 +193,27 @@ object LastFM {
         )
     }
 
+    /** Several scrobbles in one request (Last.fm takes up to [MAX_BATCH]), oldest first. */
+    suspend fun scrobbleBatch(entries: List<ScrobbleQueue.Pending>) = runCatching {
+        require(entries.size in 1..MAX_BATCH)
+        postAndRead(
+            method = "track.scrobble",
+            sessionKey = requireSessionKey(),
+            extra =
+                buildMap {
+                    entries.forEachIndexed { i, e ->
+                        put("artist[$i]", e.artist)
+                        put("track[$i]", e.track)
+                        put("timestamp[$i]", e.timestamp.toString())
+                        e.album?.let { put("album[$i]", it) }
+                        if (e.duration > 0) put("duration[$i]", e.duration.toString())
+                    }
+                },
+        )
+    }
+
+    const val MAX_BATCH = 50
+
     fun initialize(
         apiKey: String,
         secret: String,

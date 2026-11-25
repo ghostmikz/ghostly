@@ -1,6 +1,7 @@
 package com.ghostmikz.ghostly.playback
 
 import android.content.Context
+import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import com.ghostmikz.ghostly.data.MusicRepository
 import com.ghostmikz.ghostly.ui.toMediaItem
@@ -37,32 +38,44 @@ internal object QueueStore {
             .apply()
     }
 
-    /** Puts the saved queue back into an empty [player], paused where it was left. */
-    suspend fun restore(context: Context, player: Player) {
+    /** The saved queue, read back: its songs, where it was, and its shuffle and repeat. */
+    class Saved(val items: List<MediaItem>, val index: Int, val positionMs: Long, val shuffle: Boolean, val repeat: Int)
+
+    /** The saved queue with only the songs still on the phone, or null when there is none. */
+    suspend fun load(context: Context): Saved? {
         val sp = prefs(context)
-        val ids = sp.getString("ids", null)?.split(',')?.mapNotNull { it.toLongOrNull() } ?: return
-        if (ids.isEmpty()) return
+        val ids = sp.getString("ids", null)?.split(',')?.mapNotNull { it.toLongOrNull() } ?: return null
+        if (ids.isEmpty()) return null
         // No permission to read music (yet) means nothing to restore.
         val songs = runCatching { MusicRepository.load(context, filterNonMusic = false, includeHidden = true) }.getOrNull()
-            ?.songs?.associateBy { it.id } ?: return
+            ?.songs?.associateBy { it.id } ?: return null
         val index = sp.getInt("index", 0)
         val savedCurrent = ids.getOrNull(index)
         val tiers = sp.getString("tiers", "").orEmpty()
         val keptIdx = ids.indices.filter { songs[ids[it]] != null }
+        if (keptIdx.isEmpty()) return null
         val kept = keptIdx.map { songs.getValue(ids[it]) }
-        if (kept.isEmpty() || player.mediaItemCount > 0) return
         val start = kept.indexOfFirst { it.id == savedCurrent }
-        player.setMediaItems(
-            keptIdx.mapIndexed { k, i ->
+        return Saved(
+            items = keptIdx.mapIndexed { k, i ->
                 kept[k].toMediaItem().asQueueEntry(if (tiers.getOrNull(i) == 'U') QueueTier.USER_QUEUE else QueueTier.CONTEXT)
             },
-            maxOf(start, 0),
-            if (start >= 0) sp.getLong("position", 0) else 0,
+            index = maxOf(start, 0),
+            positionMs = if (start >= 0) sp.getLong("position", 0) else 0,
+            shuffle = sp.getBoolean("shuffle", false),
+            repeat = sp.getInt("repeat", Player.REPEAT_MODE_OFF),
         )
+    }
+
+    /** Puts the saved queue back into an empty [player], paused where it was left. */
+    suspend fun restore(context: Context, player: Player) {
+        val saved = load(context) ?: return
+        if (player.mediaItemCount > 0) return
+        player.setMediaItems(saved.items, saved.index, saved.positionMs)
         // The saved order already is the shuffled one; the player's own shuffle stays off.
         player.shuffleModeEnabled = false
-        QueueShuffle.setEnabled(sp.getBoolean("shuffle", false))
-        player.repeatMode = sp.getInt("repeat", Player.REPEAT_MODE_OFF)
+        QueueShuffle.setEnabled(saved.shuffle)
+        player.repeatMode = saved.repeat
         player.prepare()
     }
 

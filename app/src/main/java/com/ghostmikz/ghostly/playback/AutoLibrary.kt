@@ -3,6 +3,8 @@
 // YouTube Music; Ghostly fills the same folders from the phone: Quick picks are
 // the most played songs, Recent the play history, and Playlists / Liked songs /
 // Local Music the app's own.
+@file:androidx.annotation.OptIn(markerClass = [androidx.media3.common.util.UnstableApi::class])
+
 package com.ghostmikz.ghostly.playback
 
 import android.content.Context
@@ -184,7 +186,7 @@ internal class AutoLibrary(private val context: Context) {
         val byId = lib.songs.associateBy { it.id }
         return when {
             folderId == MEDIA_QUICK_PICKS_ID ->
-                History.stats.value.entries.sortedByDescending { it.value.count }.mapNotNull { byId[it.key] }.take(MAX_FOLDER_SONGS)
+                History.mostPlayed().mapNotNull { byId[it] }.take(MAX_FOLDER_SONGS)
             folderId == MEDIA_RECENTS_ID ->
                 History.stats.value.entries.sortedByDescending { it.value.lastPlayed }.mapNotNull { byId[it.key] }.take(MAX_FOLDER_SONGS)
             folderId == MEDIA_LIKED_ID ->

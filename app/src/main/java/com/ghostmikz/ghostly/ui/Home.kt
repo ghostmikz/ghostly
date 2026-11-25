@@ -44,7 +44,7 @@ fun HomeScreen(library: Library, actions: LibraryActions, bottomPad: Dp, loading
         stats.entries.sortedByDescending { it.value.lastPlayed }.mapNotNull { byId[it.key] }.take(15)
     }
     val most = remember(stats, byId) {
-        stats.entries.sortedByDescending { it.value.count }.mapNotNull { byId[it.key] }.take(25)
+        History.mostPlayed(stats).mapNotNull { byId[it] }.take(25)
     }
     val added = remember(songs) { songs.sortedByDescending { it.dateAdded }.take(25) }
     val favorites = remember(favIds, byId) { favIds.mapNotNull { byId[it] } }
@@ -146,7 +146,7 @@ fun HomeScreen(library: Library, actions: LibraryActions, bottomPad: Dp, loading
         }
         item {
             Shelf("Most Played", most.take(15), { "m" + it.id }) { s ->
-                SquareCard(s, s.title, "${stats[s.id]?.count ?: 0} plays") { actions.play(most, most.indexOf(s), false, "Most Played") }
+                SquareCard(s, s.title, (stats[s.id]?.count ?: 0).let { if (it == 1) "1 play" else "$it plays" }) { actions.play(most, most.indexOf(s), false, "Most Played") }
             }
         }
         item {

@@ -293,17 +293,21 @@ object ListeningStats {
         if (p.seq <= importFloor || p.seq < (writtenSeq[key] ?: 0L)) return@withLock
         writtenSeq[key] = p.seq
         runCatching {
-            directory.mkdirs()
-            val file = File(directory, "$key.json")
-            val temporary = File(directory, "$key.json.tmp")
-            temporary.writeText(json.encodeToString(StoredBucket.serializer(), snapshot))
-            if (!temporary.renameTo(file)) {
-                // renameTo will not replace on some filesystems; the delete is
-                // the only thing standing between that and a .tmp per flush.
-                if (file.delete() && temporary.renameTo(file)) Unit else temporary.delete()
-            }
+            writeFile(key, snapshot)
             version++
         }.onFailure { Log.w(TAG, "Could not write listening bucket $key", it) }
+    }
+
+    private fun writeFile(key: String, bucket: StoredBucket) {
+        directory.mkdirs()
+        val file = File(directory, "$key.json")
+        val temporary = File(directory, "$key.json.tmp")
+        temporary.writeText(json.encodeToString(StoredBucket.serializer(), bucket))
+        if (!temporary.renameTo(file)) {
+            // renameTo will not replace on some filesystems; the delete is
+            // the only thing standing between that and a .tmp per flush.
+            if (file.delete() && temporary.renameTo(file)) Unit else temporary.delete()
+        }
     }
 
     /** The bucket for [month], loading or creating it and retiring the last one. */
@@ -448,6 +452,62 @@ object ListeningStats {
         entries.sortedBy { weight(it.value) }
             .take(size - limit)
             .forEach { remove(it.key) }
+    }
+
+    // ── Songs that changed id ───────────────────────────────────────────────
+
+    /** Every MediaStore id Replay holds a number for, so [com.ghostmikz.ghostly.data.SongKeys] keeps their keys. */
+    suspend fun trackIds(): Set<Long> = withContext(Dispatchers.IO) {
+        if (!ready) return@withContext emptySet()
+        flushAndAwait()
+        idsCache?.takeIf { it.first == version }?.let { return@withContext it.second }
+        val seen = version
+        val ids = months().flatMap { read(it.toString())?.tracks.orEmpty() }.mapNotNull { it.id.toLongOrNull() }.toSet()
+        idsCache = seen to ids
+        ids
+    }
+
+    @Volatile private var idsCache: Pair<Long, Set<Long>>? = null
+
+    /**
+     * Songs that now have a different id ([com.ghostmikz.ghostly.data.SongKeys]):
+     * every month's numbers follow them, as History and the playlists do. [songs]
+     * is the phone's library by id, for the new covers and album ids.
+     */
+    suspend fun remap(moves: Map<Long, Long>, songs: Map<Long, Song>) {
+        if (!ready || moves.isEmpty()) return
+        flushAndAwait()
+        writeLock.withLock {
+            withContext(Dispatchers.IO) {
+                // Only the open month is shared with the playback sampler, so only it is
+                // changed under [lock]; the other months are files only writers (holding
+                // [writeLock], as here) touch.
+                val openKey = synchronized(lock) {
+                    // Saves taken before now hold the old ids: dropped, and the open
+                    // month written again in full by the flush below.
+                    importFloor = sequence
+                    writtenSeq.clear()
+                    val current = open
+                    if (current != null) {
+                        remapBucket(current.snapshot(), moves, songs)?.let { open = OpenBucket.of(current.key, it) }
+                        dirty = true
+                    }
+                    current?.key
+                }
+                months().forEach { month ->
+                    val key = month.toString()
+                    if (key == openKey) return@forEach
+                    val bucket = read(key) ?: return@forEach
+                    remapBucket(bucket, moves, songs)?.let { moved ->
+                        runCatching { writeFile(key, moved) }
+                            .onFailure { Log.w(TAG, "Could not move ids in bucket $key", it) }
+                    }
+                }
+                version++
+                cached = null
+            }
+        }
+        flush()
     }
 
     // ── Backup ──────────────────────────────────────────────────────────────
@@ -784,6 +844,52 @@ object ListeningStats {
      */
     private const val MAX_TRACKS = 600
     private const val MAX_NAMES = 400
+}
+
+/**
+ * [bucket] with its tracks moved to their new ids ([moves]), two entries landing
+ * on one id added together, and the covers and album ids that pointed at the old
+ * songs pointed at the new ones; null when nothing in it moved.
+ */
+internal fun remapBucket(bucket: StoredBucket, moves: Map<Long, Long>, songs: Map<Long, Song>): StoredBucket? {
+    if (bucket.tracks.none { it.id.toLongOrNull() in moves }) return null
+    val albumMoves = HashMap<String, String>()
+    fun newArt(ref: String?): String? {
+        val old = ref?.substringBefore(':')?.toLongOrNull() ?: return ref
+        val to = moves[old] ?: return ref
+        return songs[to]?.let(::artRef) ?: ref
+    }
+    val tracks = LinkedHashMap<String, TrackEntry>()
+    bucket.tracks.forEach { entry ->
+        val to = entry.id.toLongOrNull()?.let { moves[it] }
+        val moved = if (to == null) entry.copy(days = entry.days.toMutableMap()) else {
+            val song = songs[to]
+            val albumId = song?.albumId?.takeIf { it >= 0 }?.toString() ?: entry.albumId
+            if (entry.albumId != null && albumId != null && albumId != entry.albumId) albumMoves[entry.albumId!!] = albumId
+            entry.copy(
+                id = to.toString(),
+                albumId = albumId,
+                art = song?.let(::artRef) ?: entry.art,
+                days = entry.days.toMutableMap(),
+            )
+        }
+        val had = tracks[moved.id]
+        if (had == null) tracks[moved.id] = moved else had.absorb(moved)
+    }
+    fun names(list: List<NameEntry>, album: Boolean) = list.map { e ->
+        e.copy(
+            art = newArt(e.art),
+            id = if (album) e.id?.let { albumMoves[it] ?: it } else e.id,
+            // Recomputed on load (see NameEntry.key); dropped so an album whose id
+            // moved isn't filed under its old one by a reader of the export.
+            key = if (album && e.id in albumMoves) null else e.key,
+        )
+    }
+    return bucket.copy(
+        tracks = tracks.values.toList(),
+        artists = names(bucket.artists, album = false),
+        albums = names(bucket.albums, album = true),
+    )
 }
 
 /**

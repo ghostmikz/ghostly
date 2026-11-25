@@ -48,7 +48,8 @@ ProleteR, Boogie Belgique, Candlegravity, Poodleplay Arkestra and The Underscore
 - **Replay**: your top songs, artists, albums and genres, counted on the phone,
   with story cards and a picture you can share
 - **Home screen widgets**: 2x2, 4x2 and a 4x1 capsule with Like and Shuffle
-- **Last.fm**: sign in with your account, scrobble tracks and show "now playing"
+- **Last.fm**: sign in with your account, scrobble tracks and show "now playing";
+  scrobbles made offline are kept and sent when the internet is back
 - **Audio output**: 16-bit or 32-bit float output, prefer a USB DAC, and bit-perfect output
   to a DAC (Android 14 USB DAC, AAudio exclusive for built-in DACs, or Ghostly's own USB
   driver with the DAC's volume)

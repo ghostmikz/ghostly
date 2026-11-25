@@ -35,11 +35,26 @@ object History {
         if (!ok) SafeFiles.setAside(file)
     }
 
-    fun recordPlay(songId: Long) {
+    /** A song started: it is the most recent, though it isn't a play yet ([countPlay]). */
+    fun touch(songId: Long) {
         val old = _stats.value[songId]
-        _stats.value = _stats.value + (songId to Stats((old?.count ?: 0) + 1, System.currentTimeMillis()))
+        _stats.value = _stats.value + (songId to Stats(old?.count ?: 0, System.currentTimeMillis()))
         save()
     }
+
+    /**
+     * A song listened to long enough to be a play: the same rule Replay and the
+     * scrobbler use, so a skip after a few seconds never counts.
+     */
+    fun countPlay(songId: Long) {
+        val old = _stats.value[songId]
+        _stats.value = _stats.value + (songId to Stats((old?.count ?: 0) + 1, old?.lastPlayed ?: System.currentTimeMillis()))
+        save()
+    }
+
+    /** The songs played most, most first: only those that have a play. */
+    fun mostPlayed(stats: Map<Long, Stats> = _stats.value): List<Long> =
+        stats.entries.filter { it.value.count > 0 }.sortedByDescending { it.value.count }.map { it.key }
 
     /** The star is a like, and likes live in the Liked playlist (as in BitChord). */
     fun toggleFavorite(songId: Long) { Playlists.toggleLike(songId) }

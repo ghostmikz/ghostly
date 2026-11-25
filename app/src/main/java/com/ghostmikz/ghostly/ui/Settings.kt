@@ -239,6 +239,7 @@ private fun AccountPage() {
     val scrobbleDelaySeconds by Prefs.scrobbleDelaySeconds.state.collectAsState()
     var showLogin by remember { mutableStateOf(false) }
     val signedIn = lastfmUsername.isNotBlank()
+    val waitingScrobbles by com.ghostmikz.ghostly.lastfm.ScrobbleQueue.waiting.collectAsState()
 
     Label("Scrobbling")
     Card {
@@ -264,6 +265,10 @@ private fun AccountPage() {
         }
     }
     Note("Scrobble your listens to Last.fm.")
+    if (signedIn && waitingScrobbles.isNotEmpty()) {
+        val n = waitingScrobbles.size
+        Note("${if (n == 1) "1 scrobble is" else "$n scrobbles are"} waiting to be sent to Last.fm. Signing out drops them.")
+    }
 
     if (lastfmEnabled && signedIn) {
         Label("Scrobble timing")
@@ -451,8 +456,27 @@ private class ParsedImport(
     val history: History.Import?,
     val playlists: List<com.ghostmikz.ghostly.data.Playlist>?,
     val listening: List<com.ghostmikz.ghostly.data.stats.StoredBucket>?,
-    val songKeys: Map<Long, String>?,
+    val songKeys: Map<Long, com.ghostmikz.ghostly.data.SongKeys.Known>?,
 )
+
+/** This phone's data as it is now, in the shape of an import, to put back if one fails. */
+private suspend fun currentData() = ParsedImport(
+    settings = Prefs.exportJson(),
+    history = History.parseImport(History.exportJson()),
+    playlists = com.ghostmikz.ghostly.data.Playlists.parseImport(com.ghostmikz.ghostly.data.Playlists.exportJson()),
+    listening = ListeningStats.exportAll(),
+    songKeys = com.ghostmikz.ghostly.data.SongKeys.snapshot(),
+)
+
+private suspend fun applyData(data: ParsedImport) {
+    data.settings?.let(Prefs::importJson)
+    data.history?.let { History.applyImport(it, likesFromHere = data.playlists == null) }
+    data.playlists?.let(com.ghostmikz.ghostly.data.Playlists::applyImport)
+    data.listening?.let { buckets ->
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { ListeningStats.importAll(buckets) }
+    }
+    data.songKeys?.let(com.ghostmikz.ghostly.data.SongKeys::applyImport)
+}
 
 @Composable
 private fun DataPage() {
@@ -496,18 +520,18 @@ private fun DataPage() {
                     )
                 }.getOrNull()
             }
-            val ok = parsed != null && runCatching {
-                parsed.settings?.let(Prefs::importJson)
-                parsed.history?.let { History.applyImport(it, likesFromHere = parsed.playlists == null) }
-                parsed.playlists?.let(com.ghostmikz.ghostly.data.Playlists::applyImport)
-                parsed.listening?.let { buckets ->
-                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { ListeningStats.importAll(buckets) }
-                }
-                // An export from another phone: find its songs on this one.
-                parsed.songKeys?.let(com.ghostmikz.ghostly.data.SongKeys::applyImport)
-                com.ghostmikz.ghostly.data.SongKeys.reconcile(context)
-            }.isSuccess
-            Toast.makeText(context, if (ok) "Data imported" else "That file is not a Ghostly export", Toast.LENGTH_SHORT).show()
+            if (parsed == null) {
+                Toast.makeText(context, "That file is not a Ghostly export", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            // All or nothing: if any part fails to apply, the parts already applied
+            // are put back as they were.
+            val before = runCatching { currentData() }.getOrNull()
+            val ok = runCatching { applyData(parsed) }.isSuccess
+            if (!ok) before?.let { runCatching { applyData(it) } }
+            // An export from another phone: find its songs on this one.
+            com.ghostmikz.ghostly.data.SongKeys.reconcile(context)
+            Toast.makeText(context, when { ok -> "Data imported"; before != null -> "Could not import, nothing was changed"; else -> "Could not import that file" }, Toast.LENGTH_SHORT).show()
         }
     }
     Spacer(Modifier.height(12.dp))

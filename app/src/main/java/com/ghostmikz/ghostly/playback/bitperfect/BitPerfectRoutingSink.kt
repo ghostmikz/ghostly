@@ -219,7 +219,9 @@ internal class BitPerfectRoutingSink(
     override fun setOutputStreamOffsetUs(outputStreamOffsetUs: Long) =
         both { it.setOutputStreamOffsetUs(outputStreamOffsetUs) }
     override fun setVolume(volume: Float) = both { it.setVolume(volume) }
+    @androidx.annotation.RequiresApi(29)
     override fun setOffloadMode(offloadMode: Int) = normal.setOffloadMode(offloadMode)
+    @androidx.annotation.RequiresApi(29)
     override fun setOffloadDelayPadding(delayInFrames: Int, paddingInFrames: Int) =
         normal.setOffloadDelayPadding(delayInFrames, paddingInFrames)
     override fun setAudioOutputProvider(audioOutputProvider: AudioOutputProvider) =

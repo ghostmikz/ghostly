@@ -131,12 +131,17 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             _loading.value = true
             ArtCache.forgetMissing()
-            _library.value = runCatching { MusicRepository.load(getApplication(), com.ghostmikz.ghostly.data.Prefs.filterNonMusic.value) }.getOrDefault(Library())
+            // One read of the phone's files serves the library and the song matching.
+            val all = runCatching { MusicRepository.scan(getApplication()) }.getOrNull()
+            _library.value = all?.let {
+                MusicRepository.libraryFrom(it, com.ghostmikz.ghostly.data.Prefs.filterNonMusic.value, com.ghostmikz.ghostly.data.Prefs.hiddenSongs.value)
+            } ?: Library()
             byId = _library.value.songs.associateBy { it.id.toString() }
             _loading.value = false
             refresh()
-            // Playlists and history follow songs whose ids changed (a restore, a rescan).
-            com.ghostmikz.ghostly.data.SongKeys.reconcile(getApplication<Application>())
+            // Playlists, history, Replay and hidden songs follow songs whose ids
+            // changed (a restore, a rescan).
+            if (all != null) com.ghostmikz.ghostly.data.SongKeys.reconcile(getApplication<Application>(), all)
         }
     }
 

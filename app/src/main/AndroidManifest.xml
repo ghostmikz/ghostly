@@ -3,6 +3,8 @@
 
     <!-- Only Last.fm uses the network. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- To send scrobbles that waited for the internet once it is back. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
@@ -64,6 +66,14 @@
                 <action android:name="android.media.browse.MediaBrowserService" />
             </intent-filter>
         </service>
+        <!-- Headphone and car play buttons start the player again after the app was closed. -->
+        <receiver
+            android:name="androidx.media3.session.MediaButtonReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
         <!-- Home screen widgets (BitChord's MediaWidget): 2x2, 4x2 and the 4x1 capsule. -->
         <receiver
             android:name=".widget.MediaWidgetSquare"

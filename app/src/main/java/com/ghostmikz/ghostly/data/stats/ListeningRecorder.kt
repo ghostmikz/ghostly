@@ -95,7 +95,10 @@ object ListeningRecorder {
             PLAY_FLOOR_MS
         }
         val counts = !playCounted && playedThisTrack >= threshold
-        if (counts) playCounted = true
+        if (counts) {
+            playCounted = true
+            com.ghostmikz.ghostly.data.History.countPlay(song.id)
+        }
 
         ListeningStats.record(song, genresOf(song), step, counts)
 

@@ -1,6 +1,8 @@
 // Ported from BitChord's CrossfadeController (https://github.com/kushagrasinghx/BitChord, GPLv3):
 // its plain crossfade only. BitChord's Automix (beat analysis, filters, loop mixes,
 // tempo ease) is left out, so every branch that depended on it is gone too.
+@file:androidx.annotation.OptIn(markerClass = [androidx.media3.common.util.UnstableApi::class])
+
 package com.ghostmikz.ghostly.playback
 
 import android.os.SystemClock
